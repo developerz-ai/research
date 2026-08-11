@@ -1,7 +1,7 @@
 # 001 — Geometric reasoning
 
 **Question:** Is there a geometric quantity of hidden states that predicts reasoning robustness after controlling for parameter count and training tokens?
-**Status:** 🟡 active — E001 run and analysed; E002 blocked, redesign pending
+**Status:** 🟡 active — E001/E001b/E001c run; 12 models measured, 2019→2026, 124M→9B. E002 unblocked.
 **Started:** 2026-08-11
 
 ## Why this is worth testing
@@ -40,46 +40,68 @@ Two things make this project worth running:
 
 | ID | Question | Status | Verdict |
 |---|---|---|---|
-| [E001](experiments/E001-flip-rate-across-scale.md) | What are the flip rates of open models 124M→1.5B, and does the shortcut gap shrink with scale? | **analysed** | Claim falsified as stated; no model reaches chance |
-| E002 | Does any hidden-state geometric descriptor track flip rate independently of size? | **blocked by E001** — see below | — |
+| [E001](experiments/E001-flip-rate-across-scale.md) | Flip rate across GPT-2, 124M→1.5B | **analysed** | Nothing reaches chance — but this turned out to be about GPT-2, not about small models |
+| [E001b](experiments/E001b-modern-small-models.md) | Same, on 2024 models (SmolLM2, Qwen2.5) | **analysed** | 3–8× higher at matched size; reverses E001's reading |
+| [E001c](experiments/E001c-current-generation.md) | Same, on 2026 models (Qwen3/3.5, SmolLM3) | **analysed** | 1.88B reaches 0.772 with zero shortcut gap; 9B reaches 0.968 |
+| E002 | Does any hidden-state geometric descriptor track flip rate independently of size? | **unblocked** | — |
 
-E001 required no training and ran in under an hour, which is why it went first.
+None of these required training; all three ran in an afternoon.
 
 ## Findings so far
 
-**E001 (2026-08-11, 3 seeds × 4 models × 600 pairs, RTX 3090)** `[ours]`
+**12 models, 2019 → 2026, 124M → 9B, 600 fresh pairs each** `[ours]`
 
-| Model | Params | Flip rate | Canonical acc | Stickiness |
-|---|---|---|---|---|
-| gpt2 | 124M | 0.048 | 0.729 | 0.913 |
-| gpt2-medium | 355M | 0.042 | 0.726 | 0.922 |
-| gpt2-large | 774M | 0.185 | 0.692 | 0.772 |
-| gpt2-xl | 1.5B | 0.171 | 0.755 | 0.793 |
-| *chance* | — | *0.250* | *0.500* | *0.500* |
+| Model | Params | Year | Flip rate | Shortcut gap | Stickiness |
+|---|---|---|---|---|---|
+| gpt2 | 124M | 2019 | 0.048 | +0.156 | 0.913 |
+| gpt2-medium | 355M | 2019 | 0.042 | +0.161 | 0.922 |
+| gpt2-large | 774M | 2019 | 0.185 | +0.127 | 0.772 |
+| gpt2-xl | 1.5B | 2019 | 0.171 | +0.116 | 0.793 |
+| SmolLM2-135M | 135M | 2024 | 0.185 | +0.147 | 0.792 |
+| SmolLM2-360M | 362M | 2024 | 0.337 | +0.109 | 0.662 |
+| Qwen2.5-0.5B | 494M | 2024 | 0.327 | +0.097 | 0.648 |
+| Qwen2.5-1.5B | 1.54B | 2024 | 0.532 | +0.052 | 0.465 |
+| SmolLM2-1.7B | 1.71B | 2024 | 0.530 | +0.055 | 0.470 |
+| Qwen2.5-3B | 3.09B | 2024 | 0.803 | +0.006 | 0.193 |
+| Qwen2.5-7B | 7.62B | 2024 | 0.800 | +0.009 | 0.200 |
+| Qwen3-0.6B | 596M | 2025 | 0.483 | +0.061 | 0.512 |
+| Qwen3-1.7B | 1.72B | 2025 | 0.498 | +0.052 | 0.498 |
+| **Qwen3.5-2B** | 1.88B | 2026 | **0.772** | −0.004 | 0.210 |
+| SmolLM3-3B | 3.08B | 2025 | 0.562 | +0.003 | 0.380 |
+| **Qwen3.5-9B** | 8.95B | 2026 | **0.968** | +0.000 | 0.032 |
+| *chance* | — | — | *0.250* | *0.000* | *0.500* |
 
-1. **No GPT-2-family model reaches chance flip rate**, at any size tested. Below chance
-   means errors are anti-correlated across the pair — both answers coming from the surface
-   form the two members share.
-2. **Canonical accuracy is 0.69–0.76 throughout.** A conventional benchmark would report
-   that number and call these models decent at relational reasoning. The paired design puts
-   the same models at 0.04–0.19. That contrast is the instrument working, and it is the most
-   transferable result here.
-3. **Scale helps non-monotonically and insufficiently.** 12.5× parameters buys 0.048 → 0.171,
-   entirely between 355M and 774M; gpt2-medium is *below* gpt2 and gpt2-xl is at or below
-   gpt2-large.
-4. **A methodological finding worth more than the numbers:** the first run scored 0.98 flip
-   rate on one family, which turned out to be solvable by "answer the last-named entity".
-   Item families are now checked against trivial heuristics on every run
-   (`uv run geom baselines`); the discarded runs are preserved in `results/superseded/`
-   with the full explanation.
+1. **Vintage beats size.** At matched parameters, 2024 models score 3–8× GPT-2, and Qwen3.5-2B
+   (1.88B) beats SmolLM3-3B (3.08B) by 0.21 while being 40% smaller. Across the whole table,
+   knowing a model's training recipe predicts flip rate better than knowing its size — which
+   is [[library/ideas/data-quality-over-scale]] restated in our own measurements.
+2. **The shortcut signature decays to exactly zero.** From +0.156 (gpt2) to 0.000
+   (Qwen3.5-9B). At the top, errors on the two members of a pair are statistically
+   independent — no surface-matching signal left to detect.
+3. **Canonical accuracy is not diagnostic.** GPT-2 scores 0.69–0.76 on canonical items alone
+   while managing 0.04–0.19 paired. A conventional benchmark would call those models
+   competent. **That contrast is the most transferable result here.**
+4. **Two of our own errors, both caught by the harness:**
+   - An item family solvable by "answer the last-named entity" at flip rate 1.0. Now guarded
+     by `uv run geom baselines` on every run.
+   - A model that loaded with **randomly-initialised weights** and returned 0.013 — which
+     would have read as "a 100M model cannot reason". `load_model` now refuses any checkpoint
+     with missing keys.
+   Both discarded runs are kept in `results/superseded/` with explanations.
+5. **And one wrong conclusion, corrected:** E001b called 0.80 an instrument ceiling based on
+   Qwen2.5-3B and -7B agreeing. Qwen3.5-9B then scored 0.968 on the same items. Two models
+   agreeing is not a ceiling.
 
-**Consequence:** E002 cannot run on this ladder. Flip rate has almost no usable variance
-across it (0.04–0.19, all sub-chance), so correlating it against geometric descriptors would
-be correlating against noise. Revised next steps:
+**Consequence:** E002 is unblocked — flip rate now spans 0.048 → 0.968, ample variance to
+correlate geometric descriptors against. Restrict to **≤2B**, where the shortcut gap is
+still non-zero and the metric discriminates. Remaining gaps:
 
-- **E001b** — extend the ladder to modern ≤1.5B models (Qwen, Llama, SmolLM). One hour.
-  GPT-2 is a 2019 base family and its failure is weak evidence about small models today.
-- **E001c** — add a digit-separated variant of the `arithmetic` family. Later reading
+- **~100M current generation is still unmeasured.** `nanowhale-100m-base` failed to load
+  correctly and is the single most relevant data point for the source's ~124M claim. Needs a
+  transformers version matching `DeepseekV4ForCausalLM`.
+- **Seeds.** E001b/E001c are single-seed. The large gaps are safe (E001 spread was ≤0.06) but
+  the Qwen3-0.6B vs Qwen3-1.7B near-tie (0.483 vs 0.498) is not resolvable at one seed.
+- **E001d** — add a digit-separated variant of the `arithmetic` family. Later reading
   ([[library/ideas/tokenization-limits-reasoning]]) says a BPE tokenizer can make arithmetic
   impossible regardless of reasoning ability, and `arithmetic` had our lowest flip rate with
   sub-chance canonical accuracy — the signature of a tokenizer floor. Our preregistration

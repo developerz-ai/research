@@ -52,8 +52,33 @@ def load_model(name: str, device_info: DeviceInfo | None = None) -> LoadedModel:
         # but transformers refuses to batch without one.
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(name, dtype=autocast_dtype(info))
-    model.to(info.device)
+    dtype = autocast_dtype(info)
+    model, loading_info = AutoModelForCausalLM.from_pretrained(
+        name, dtype=dtype, output_loading_info=True
+    )
+
+    # A checkpoint whose keys do not match the installed architecture gets the missing
+    # tensors **randomly initialised**, and transformers only warns. The model then loads,
+    # runs, and produces a plausible-looking score for a partly-random network.
+    #
+    # Caught on HuggingFaceTB/nanowhale-100m-base (DeepseekV4ForCausalLM): shared_experts
+    # and hc_head weights were newly initialised, and it scored 0.013 flip rate — a number
+    # that would have read as "tiny model cannot reason" rather than "we evaluated noise".
+    # Refuse to score such a model.
+    missing = list(loading_info.get("missing_keys", []))
+    if missing:
+        preview = ", ".join(missing[:5])
+        raise RuntimeError(
+            f"{name}: {len(missing)} weight(s) missing from the checkpoint and randomly "
+            f"initialised ({preview}{'…' if len(missing) > 5 else ''}). Scoring this would "
+            "measure noise. Upgrade transformers to a version matching the model's "
+            "architecture, or drop the model from the ladder and say so in the writeup."
+        )
+    # Cast device AND dtype together. `dtype=` at load time does not always convert every
+    # module — a checkpoint with mixed-precision tensors leaves some in fp32, which then
+    # fails at the first matmul with "expected mat1 and mat2 to have the same dtype".
+    # Caught on HuggingFaceTB/nanowhale-100m-base.
+    model.to(device=info.device, dtype=dtype)
     model.eval()
 
     return LoadedModel(
