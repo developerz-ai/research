@@ -1,0 +1,74 @@
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.uv/
+uv.lock.bak
+
+# --- native builds (C/C++/CUDA extensions) ---
+build/
+dist/
+*.so
+*.pyd
+*.dll
+*.obj
+*.o
+*.a
+*.lib
+*.exp
+*.pdb
+*.ninja_deps
+*.ninja_log
+compile_commands.json
+
+# --- data & weights: never committed ---
+# results/ IS committed (JSON + plots); raw corpora and checkpoints are not.
+**/data/raw/
+**/data/cache/
+# Generated item sets: ship the seed, not the file. A published pair set is a benchmark,
+# and benchmarks leak — freshness is the contamination defence.
+**/data/*.jsonl
+**/checkpoints/
+**/runs/
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.arrow
+*.parquet
+
+# --- experiment tracking ---
+wandb/
+mlruns/
+.tensorboard/
+events.out.tfevents.*
+
+# --- notebooks ---
+.ipynb_checkpoints/
+
+# --- tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# --- editors / OS ---
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+
+# --- secrets ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem

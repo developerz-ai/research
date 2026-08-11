@@ -1,0 +1,10 @@
+# This repo is developed on Windows and Linux. Normalise line endings in the index so a
+# checkout on one platform does not show every file as modified on the other.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.safetensors binary
+*.pt binary
+*.bin binary
