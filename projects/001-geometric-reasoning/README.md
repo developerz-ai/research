@@ -82,6 +82,17 @@ be correlating against noise. Revised next steps:
 - **E002** — reconsider **stickiness** as the outcome variable. It is well defined even at
   chance accuracy and fell with scale where flip rate did not.
 
+Two things a functional check of `geom geometry` on gpt2 already surfaced, worth fixing
+before E002 is preregistered (not results — the run was a wiring check, so it was not kept):
+
+- **Layer 0 intrinsic dimension is undefined**, and correctly reports `nan`. Every prompt
+  ends with the same token (`Answer:`), so the layer-0 last-token embeddings are duplicates.
+  E002 must either skip layer 0 or pool differently.
+- **Anisotropy is 0.86–0.996 at every layer.** The hidden states sit in a very narrow cone,
+  which is the documented transformer behaviour but means raw cosine geometry is nearly
+  uninformative here. Descriptors should be computed on centred activations, and E002 should
+  say so explicitly rather than inheriting the default.
+
 ## Setup
 
 ```bash
