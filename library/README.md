@@ -31,17 +31,28 @@ ideas are stored in a form that travels.
 ## Current index
 
 ### Sources
-- [Michels — Sophontic geometric reasoning interview](sources/michels-sophontic-interview.md) `[source]`
+- [Michels — geometric reasoning interview](sources/michels-sophontic-interview.md) `[source]` — the 53-min video, 12 claims with locators
+- [sophontic.ai — full site](sources/sophontic-website.md) `[source]` — all pages; the `/alignment/` page is the substantive one
+- [Michels — wider body of work](sources/michels-other-work.md) `[source]` — *Principia Cybernetica*, teleodynamics, where the vocabulary originates
 
 ### Ideas
+
+*From the Sophontic material*
 - [Reasoning as internal geometry](ideas/reasoning-as-internal-geometry.md) — reasoning is a property of representational structure, not parameter count
+- [Flip-rate evaluation](ideas/flip-rate-evaluation.md) `[ours]` — paired perturbations as a test that surface heuristics cannot pass. **Built and run.**
 - [Frozen giants](ideas/frozen-giants.md) — scaling yields large, static, centrally-controlled models, and that is a design choice
-- [Flip-rate evaluation](ideas/flip-rate-evaluation.md) — paired perturbations as a test that surface heuristics cannot pass
 - [Behaviourist vs cognitive training](ideas/behaviourist-vs-cognitive-training.md) — optimising outputs vs shaping internal operations
 - [Cognitive liberty](ideas/cognitive-liberty.md) — model locality as a precondition for freedom of thought
-- [Latent space as implicate order](ideas/latent-space-as-implicate-order.md) — Bohm's enfolded order as a lens on representation
+- [Latent space as implicate order](ideas/latent-space-as-implicate-order.md) — Bohm's enfolded order as a lens on representation. A boundary marker, not a direction.
+
+*Established literature — the controls and rivals*
+- [Data quality over scale](ideas/data-quality-over-scale.md) `[lit]` — **the rival explanation for every small-model win**
 - [Linear representation hypothesis](ideas/linear-representation-hypothesis.md) `[lit]` — concepts as directions
-- [Data quality over scale](ideas/data-quality-over-scale.md) `[lit]` — curriculum and data design buying capability that size otherwise buys
+- [Token geometry and anisotropy](ideas/token-geometry-and-anisotropy.md) `[lit]` `[ours]` — representations live in a narrow cone; the first bar any geometric claim must clear
+- [Tokenization limits reasoning](ideas/tokenization-limits-reasoning.md) `[lit]` — the tokenizer can make a task impossible; check before blaming geometry
+- [Latent reasoning](ideas/latent-reasoning.md) `[lit]` — COCONUT and continuous thought: the mainstream counterpart to the geometry claim
+- [Behaviourist control failures](ideas/behaviourist-control-failures.md) `[lit]` — sycophancy, sandbagging, alignment faking, sleeper agents
+- [Attractor states](ideas/attractor-states.md) `[lit]` — the bliss attractor; the empirical seed of the whole programme
 
 ### Syntheses
 - [Geometry vs scale is an empirical question](syntheses/geometry-vs-scale-is-empirical.md)

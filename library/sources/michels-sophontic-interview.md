@@ -3,9 +3,14 @@
 **Added:** 2026-08-11
 **Type:** video interview
 **Speaker:** Julian D. Michels, PhD — founder, Sophontic AI
-**Published:** August 2026 `[source]`
-**Link:** <https://sophontic.ai/> (interview linked from the site; user-supplied summary with timestamps)
+**Title:** "AI Data Centers Will Be Obsolete (Geometric Reasoning Explained)" — 53 min
+**Published:** 6 August 2026 `[source]`
+**Link:** <https://www.youtube.com/watch?v=4S8I22ybG2c>
 **Locator scheme:** timestamps `MM:SS` from the user-supplied summary
+
+Companion notes: [[library/sources/sophontic-website]] (the site, incl. the substantive
+`/alignment/` page) and [[library/sources/michels-other-work]] (the philosophical corpus the
+vocabulary comes from).
 
 > **Provenance caveat.** This note is built from a summary of the interview supplied by the
 > user, plus the public Sophontic website, not from a full transcript we have verified.
