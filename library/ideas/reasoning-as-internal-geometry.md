@@ -87,12 +87,34 @@ compute on data or parameters.
 - Motivated by: [[library/ideas/latent-space-as-implicate-order]] — philosophically, not
   mechanically. Keep separate.
 
+## What we measured
+
+`[ours]` — `projects/001-geometric-reasoning`, E002, 2026-08-11. 16 models, 124M→9B,
+2019→2026.
+
+**No geometric descriptor predicts reasoning robustness once size is controlled.**
+Participation ratio, effective rank, TwoNN intrinsic dimension and anisotropy all correlate
+with flip rate at ρ = 0.57–0.85 raw — and essentially all of it is mediated by parameter
+count. Best surviving partial ρ after removing the GPT-2 family: **0.006**.
+
+The apparent +0.692 for intrinsic dimension was four 2019 models in one corner. Old models
+have both worse geometry and worse reasoning; nothing links the two but vintage.
+
+Scope, stated plainly: this tests *our* descriptors, at one depth, across models that differ
+in everything at once. It is a screening result, not a refutation. No intervention was
+tested, and the strong form remains untested rather than disproved.
+
 ## Open questions
 
-1. What is "geometric density"? Without an operational definition the central claim is
-   untestable as stated — so we must pick our own proxies and say clearly that we did.
-2. Does any geometric metric predict reasoning robustness **after** controlling for
-   parameters and training tokens?
-3. Can a geometry-shaping auxiliary loss beat spending the same compute on more/better data?
-4. Does it transfer, or does it only work inside a narrow domain — where specialisation
-   already explains the result?
+1. What is "geometric density"? Still undefined. Until it is, every test is a test of our
+   guess, and a proponent can always say we measured the wrong quantity. `[open]`
+2. ~~Does any geometric metric predict reasoning robustness after controlling for
+   parameters?~~ **Not among the four we tried, across 16 models.** `[ours]`
+3. Would a *better-controlled* ladder — one family, one corpus, varying only size — show a
+   surviving correlation? Our confound was uncontrolled model diversity; this is the fix, and
+   it requires training. `[open]`
+4. Can a geometry-shaping auxiliary loss beat spending the same compute on better data?
+   The decisive experiment. **Not justified by current evidence** — the cheap screen came
+   back empty. `[open]`
+5. Does it transfer, or work only inside a narrow domain where specialisation already
+   explains the result?

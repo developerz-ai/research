@@ -41,7 +41,7 @@ work is, and every choice below is a place the test could fail to be a test of t
 | `[source]` | Michels asserts geometry determines reasoning | [[library/sources/michels-sophontic-interview]] C1 |
 | `[lit]` | Representation geometry is real, measurable, causally relevant | [[library/ideas/linear-representation-hypothesis]] |
 | `[lit]` | Rival explanation: data quality/curriculum produces the same outcome with no geometry | [[library/ideas/data-quality-over-scale]] |
-| `[ours]` | — | nothing yet |
+| `[ours]` | **No descriptor survives.** Best \|partial ρ\| = 0.006 across 16 models once size is controlled and GPT-2 is removed. Raw ρ up to +0.850 is entirely mediated by size. | `experiments/E002-geometry-vs-robustness.md` |
 
 ## Cheap test first
 
@@ -72,3 +72,4 @@ Asymmetric evidential value is a reason to run it, not a flaw to hide.
 | Date | Class | Change |
 |---|---|---|
 | 2026-08-11 | `[open]` | created, falsifier fixed before implementation |
+| 2026-08-11 | `[ours]` | **Confounded, trending falsified.** E002: best surviving partial ρ = 0.006 vs a 0.3 falsification threshold. The apparent +0.692 was the GPT-2 family sitting in one corner — old models have both worse geometry and worse reasoning, with nothing linking the two. Scoped: our descriptors, one depth, 16 uncontrolled models, no intervention tested. |

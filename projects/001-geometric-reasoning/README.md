@@ -1,7 +1,7 @@
 # 001 — Geometric reasoning
 
 **Question:** Is there a geometric quantity of hidden states that predicts reasoning robustness after controlling for parameter count and training tokens?
-**Status:** 🟡 active — E001/E001b/E001c run; 12 models measured, 2019→2026, 124M→9B. E002 unblocked.
+**Status:** 🟢 primary question answered — 16 models measured (2019→2026, 124M→9B), E002 came back confounded/null
 **Started:** 2026-08-11
 
 ## Why this is worth testing
@@ -43,9 +43,25 @@ Two things make this project worth running:
 | [E001](experiments/E001-flip-rate-across-scale.md) | Flip rate across GPT-2, 124M→1.5B | **analysed** | Nothing reaches chance — but this turned out to be about GPT-2, not about small models |
 | [E001b](experiments/E001b-modern-small-models.md) | Same, on 2024 models (SmolLM2, Qwen2.5) | **analysed** | 3–8× higher at matched size; reverses E001's reading |
 | [E001c](experiments/E001c-current-generation.md) | Same, on 2026 models (Qwen3/3.5, SmolLM3) | **analysed** | 1.88B reaches 0.772 with zero shortcut gap; 9B reaches 0.968 |
-| E002 | Does any hidden-state geometric descriptor track flip rate independently of size? | **unblocked** | — |
+| [E002](experiments/E002-geometry-vs-robustness.md) | Does any hidden-state geometric descriptor track flip rate independently of size? | **analysed** | **Confounded → no.** Best surviving \|partial ρ\| = 0.006 |
 
-None of these required training; all three ran in an afternoon.
+None required training; all four ran in an afternoon.
+
+## The headline
+
+**Geometry does not predict reasoning robustness once you control for size.**
+
+Across 16 models, every geometric descriptor correlates strongly with flip rate at first
+glance (ρ up to +0.850). Essentially all of it is size. Control for parameter count and drop
+the GPT-2 family, and the best surviving partial correlation is **0.006** — against a
+falsification threshold of 0.3 fixed before the code was written.
+
+The apparent signal was four 2019 models sitting in a corner: old models have both worse
+geometry and worse reasoning, and nothing connects the two except vintage.
+
+This does **not** refute the geometry claim — we tested no intervention, and our descriptors
+are a guess at a term the source never defines. It does mean the cheap screen came back
+empty, so the expensive matched-training experiment is not justified on this evidence.
 
 ## Findings so far
 

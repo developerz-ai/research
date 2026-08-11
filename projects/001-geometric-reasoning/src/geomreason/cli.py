@@ -359,6 +359,98 @@ def export(
 
 
 @app.command()
+def geosweep(
+    models: str = typer.Option("", help="comma-separated; default = every model in results/"),
+    n: int = typer.Option(24, help="pairs per family to draw prompts from"),
+    seed: int = typer.Option(0),
+    batch_size: int = typer.Option(8),
+    max_samples: int = typer.Option(288),
+    experiment: str = typer.Option("E002"),
+) -> None:
+    """Collect hidden-state geometry for every model that has a flip-rate result."""
+    if models.strip():
+        wanted = [m.strip() for m in models.split(",") if m.strip()]
+    else:
+        wanted = sorted({
+            json.loads(p.read_text(encoding="utf-8")).get("config", {}).get("model")
+            for p in RESULTS.glob("E001*.json")
+        } - {None})
+
+    console.print(f"\n  {len(wanted)} model(s) to profile\n")
+    for model in wanted:
+        out = RESULTS / f"{experiment}-geom-{model.replace('/', '_')}.json"
+        if out.exists():
+            console.print(f"  [dim]skip[/dim] {model} — already profiled")
+            continue
+        console.rule(f"[bold]{model}")
+        try:
+            geometry(model=model, n=n, seed=seed, batch_size=batch_size,
+                     max_samples=max_samples, out=out, experiment=experiment)
+        except (NameError, AttributeError, ImportError, TypeError):
+            raise
+        except Exception as exc:
+            console.print(f"  [red]failed[/red] {model}: {type(exc).__name__}: {exc}\n")
+
+
+@app.command()
+def correlate(
+    experiment: str = typer.Option("E002"),
+    out: Path | None = typer.Option(None),
+) -> None:
+    """E002: partial correlation of geometry against flip rate, controlling for size."""
+    from . import correlate as analysis
+
+    points = analysis.load_points(RESULTS, geometry_experiment=experiment)
+    if len(points) < 4:
+        console.print(f"  only {len(points)} model(s) with both geometry and flip rate — "
+                      "run 'geom geosweep' first")
+        raise typer.Exit(1)
+
+    console.print(f"\n  [bold]{len(points)} models[/bold] with both measurements\n")
+    ladder = Table(show_header=True)
+    for column in ("model", "params (M)", "flip rate"):
+        ladder.add_column(column, justify="right")
+    for p in sorted(points, key=lambda p: p.n_params):
+        ladder.add_row(p.model, f"{p.n_params / 1e6:.0f}", f"{p.flip_rate:.3f}")
+    console.print(ladder)
+
+    report = analysis.run(points)
+
+    def show(rows: list[dict], title: str) -> None:
+        table = Table(title=title, title_justify="left")
+        for column in ("descriptor", "n", "ρ(geom,flip)", "ρ(geom,size)", "**partial ρ**"):
+            table.add_column(column, justify="right")
+        for row in rows:
+            partial_rho = row["partial_spearman"]
+            marker = "[green]" if abs(partial_rho) >= analysis.SUPPORT_THRESHOLD else "[dim]"
+            table.add_row(
+                row["descriptor"], str(row["n"]),
+                f"{row['spearman_geom_flip']:+.3f}",
+                f"{row['spearman_geom_size']:+.3f}",
+                f"{marker}{partial_rho:+.3f}[/]",
+            )
+        console.print()
+        console.print(table)
+
+    show(report["primary"], f"PRIMARY — relative depth {analysis.PRIMARY_DEPTH} (preregistered)")
+    show(report["primary_excluding_gpt2"], "Confound check — same, excluding GPT-2 family")
+
+    console.print(f"\n  [bold]verdict: {report['verdict']}[/bold]")
+    console.print(f"  [dim]support ≥{analysis.SUPPORT_THRESHOLD} · "
+                  f"falsify <{analysis.FALSIFY_THRESHOLD} · "
+                  f"{report['n_exploratory_tests']} exploratory tests not shown "
+                  f"(multiplicity)[/dim]")
+    console.print(f"  [dim]{report['caveat']}[/dim]\n")
+
+    path = RunRecord(
+        experiment=experiment, seed=0,
+        config={"models": [p.model for p in points], "analysis": "partial spearman"},
+        metrics=report, items=[],
+    ).write(out or RESULTS / f"{experiment}-correlation.json")
+    console.print(f"  [green]wrote[/green] {path}\n")
+
+
+@app.command()
 def smoke() -> None:
     """Fast end-to-end check: generate, score with a tiny model, aggregate. CPU-friendly."""
     console.print("\n  [bold]1/3[/bold] item generation + validation")

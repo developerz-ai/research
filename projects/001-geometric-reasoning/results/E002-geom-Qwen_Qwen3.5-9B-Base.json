@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "experiment": "E002",
+  "timestamp_utc": "2026-08-11T17:04:33+00:00",
+  "git_sha": "b88d033-dirty",
+  "seed": 0,
+  "hardware": {
+    "platform": "Windows 11",
+    "machine": "AMD64",
+    "python": "3.12.13",
+    "accelerator": {
+      "backend": "cuda",
+      "device": "cuda:0",
+      "name": "NVIDIA GeForce RTX 3090",
+      "total_memory_gb": 25.8,
+      "supports_bf16": true,
+      "torch_version": "2.13.0+cu126",
+      "build": "cuda 12.6"
+    }
+  },
+  "config": {
+    "model": "Qwen/Qwen3.5-9B-Base",
+    "n_params": 8953803264,
+    "n_per_family": 24,
+    "max_samples": 288,
+    "n_prompts": 288
+  },
+  "metrics": {
+    "layers": [
+      {
+        "layer": 0,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 0.0,
+        "effective_rank": 0.0,
+        "intrinsic_dim_twonn": NaN,
+        "anisotropy": 1.0,
+        "mean_norm": 0.6645
+      },
+      {
+        "layer": 1,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 7.9884,
+        "effective_rank": 14.6748,
+        "intrinsic_dim_twonn": 2.4323,
+        "anisotropy": 0.9995,
+        "mean_norm": 5.8797
+      },
+      {
+        "layer": 2,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.2992,
+        "effective_rank": 8.7573,
+        "intrinsic_dim_twonn": 2.9379,
+        "anisotropy": 0.9975,
+        "mean_norm": 6.7798
+      },
+      {
+        "layer": 3,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.945,
+        "effective_rank": 7.8035,
+        "intrinsic_dim_twonn": 3.6655,
+        "anisotropy": 0.9922,
+        "mean_norm": 6.5927
+      },
+      {
+        "layer": 4,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.0135,
+        "effective_rank": 4.8653,
+        "intrinsic_dim_twonn": 4.8333,
+        "anisotropy": 0.9833,
+        "mean_norm": 11.4226
+      },
+      {
+        "layer": 5,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.134,
+        "effective_rank": 5.0701,
+        "intrinsic_dim_twonn": 5.1624,
+        "anisotropy": 0.9744,
+        "mean_norm": 12.8034
+      },
+      {
+        "layer": 6,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.5146,
+        "effective_rank": 5.7266,
+        "intrinsic_dim_twonn": 5.4857,
+        "anisotropy": 0.9755,
+        "mean_norm": 15.3747
+      },
+      {
+        "layer": 7,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.1925,
+        "effective_rank": 6.7953,
+        "intrinsic_dim_twonn": 6.2638,
+        "anisotropy": 0.9581,
+        "mean_norm": 16.6502
+      },
+      {
+        "layer": 8,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.9984,
+        "effective_rank": 6.3718,
+        "intrinsic_dim_twonn": 7.3491,
+        "anisotropy": 0.9464,
+        "mean_norm": 19.4428
+      },
+      {
+        "layer": 9,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.0374,
+        "effective_rank": 6.3912,
+        "intrinsic_dim_twonn": 7.3044,
+        "anisotropy": 0.9392,
+        "mean_norm": 20.2219
+      },
+      {
+        "layer": 10,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.6114,
+        "effective_rank": 5.8751,
+        "intrinsic_dim_twonn": 7.1542,
+        "anisotropy": 0.9255,
+        "mean_norm": 23.5446
+      },
+      {
+        "layer": 11,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.8821,
+        "effective_rank": 6.2212,
+        "intrinsic_dim_twonn": 7.3605,
+        "anisotropy": 0.9158,
+        "mean_norm": 24.2913
+      },
+      {
+        "layer": 12,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.769,
+        "effective_rank": 6.1107,
+        "intrinsic_dim_twonn": 7.2107,
+        "anisotropy": 0.9099,
+        "mean_norm": 26.7969
+      },
+      {
+        "layer": 13,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.7748,
+        "effective_rank": 6.2424,
+        "intrinsic_dim_twonn": 7.058,
+        "anisotropy": 0.8974,
+        "mean_norm": 27.097
+      },
+      {
+        "layer": 14,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.789,
+        "effective_rank": 6.4868,
+        "intrinsic_dim_twonn": 7.1428,
+        "anisotropy": 0.8853,
+        "mean_norm": 28.3823
+      },
+      {
+        "layer": 15,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.7639,
+        "effective_rank": 6.5994,
+        "intrinsic_dim_twonn": 7.2574,
+        "anisotropy": 0.8744,
+        "mean_norm": 29.3785
+      },
+      {
+        "layer": 16,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.8409,
+        "effective_rank": 6.9776,
+        "intrinsic_dim_twonn": 8.3415,
+        "anisotropy": 0.8493,
+        "mean_norm": 30.6579
+      },
+      {
+        "layer": 17,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.8959,
+        "effective_rank": 7.2834,
+        "intrinsic_dim_twonn": 8.3698,
+        "anisotropy": 0.8292,
+        "mean_norm": 32.8953
+      },
+      {
+        "layer": 18,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.9443,
+        "effective_rank": 7.5437,
+        "intrinsic_dim_twonn": 8.3127,
+        "anisotropy": 0.8072,
+        "mean_norm": 35.8875
+      },
+      {
+        "layer": 19,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.8586,
+        "effective_rank": 7.4423,
+        "intrinsic_dim_twonn": 8.4132,
+        "anisotropy": 0.7953,
+        "mean_norm": 42.3603
+      },
+      {
+        "layer": 20,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.2569,
+        "effective_rank": 8.3314,
+        "intrinsic_dim_twonn": 7.1653,
+        "anisotropy": 0.7732,
+        "mean_norm": 50.8666
+      },
+      {
+        "layer": 21,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.032,
+        "effective_rank": 7.8672,
+        "intrinsic_dim_twonn": 7.3532,
+        "anisotropy": 0.7739,
+        "mean_norm": 60.5458
+      },
+      {
+        "layer": 22,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.8855,
+        "effective_rank": 7.3373,
+        "intrinsic_dim_twonn": 7.4785,
+        "anisotropy": 0.7483,
+        "mean_norm": 68.6819
+      },
+      {
+        "layer": 23,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 3.9396,
+        "effective_rank": 7.3069,
+        "intrinsic_dim_twonn": 7.0204,
+        "anisotropy": 0.7845,
+        "mean_norm": 85.9496
+      },
+      {
+        "layer": 24,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.8858,
+        "effective_rank": 10.5771,
+        "intrinsic_dim_twonn": 6.1248,
+        "anisotropy": 0.7444,
+        "mean_norm": 93.7348
+      },
+      {
+        "layer": 25,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.7939,
+        "effective_rank": 10.198,
+        "intrinsic_dim_twonn": 6.0877,
+        "anisotropy": 0.7566,
+        "mean_norm": 103.7395
+      },
+      {
+        "layer": 26,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.7723,
+        "effective_rank": 10.2161,
+        "intrinsic_dim_twonn": 6.0476,
+        "anisotropy": 0.7729,
+        "mean_norm": 113.6201
+      },
+      {
+        "layer": 27,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 4.5826,
+        "effective_rank": 9.9096,
+        "intrinsic_dim_twonn": 5.9745,
+        "anisotropy": 0.8547,
+        "mean_norm": 152.186
+      },
+      {
+        "layer": 28,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 7.9348,
+        "effective_rank": 18.0018,
+        "intrinsic_dim_twonn": 4.4765,
+        "anisotropy": 0.7055,
+        "mean_norm": 137.4076
+      },
+      {
+        "layer": 29,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 8.0447,
+        "effective_rank": 18.3725,
+        "intrinsic_dim_twonn": 4.5041,
+        "anisotropy": 0.7582,
+        "mean_norm": 164.4571
+      },
+      {
+        "layer": 30,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 8.5537,
+        "effective_rank": 19.5537,
+        "intrinsic_dim_twonn": 4.1401,
+        "anisotropy": 0.7436,
+        "mean_norm": 176.4456
+      },
+      {
+        "layer": 31,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 8.7986,
+        "effective_rank": 20.1247,
+        "intrinsic_dim_twonn": 3.8867,
+        "anisotropy": 0.7543,
+        "mean_norm": 203.8017
+      },
+      {
+        "layer": 32,
+        "n_samples": 288,
+        "ambient_dim": 4096,
+        "participation_ratio": 8.9419,
+        "effective_rank": 20.4384,
+        "intrinsic_dim_twonn": 2.9174,
+        "anisotropy": 0.8124,
+        "mean_norm": 129.411
+      }
+    ]
+  },
+  "notes": "Our operationalisation of an undefined term; all descriptors preregistered together.",
+  "items": []
+}
