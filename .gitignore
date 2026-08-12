@@ -23,6 +23,13 @@ dist/
 *.ninja_log
 compile_commands.json
 
+# --- corpus: the raw pile of papers, theses, and books ---
+# Copyrighted, large, and a contamination hazard if it ever leaks into a training set.
+# INDEX.md is the committed artifact: it records what was read, with hashes.
+library/corpus/**
+!library/corpus/README.md
+!library/corpus/INDEX.md
+
 # --- data & weights: never committed ---
 # results/ IS committed (JSON + plots); raw corpora and checkpoints are not.
 **/data/raw/

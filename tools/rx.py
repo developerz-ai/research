@@ -276,6 +276,83 @@ def cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
+CORPUS = LIBRARY / "corpus"
+CORPUS_INDEX = CORPUS / "INDEX.md"
+DOC_SUFFIXES = {".pdf", ".epub", ".djvu", ".txt", ".md", ".html", ".htm", ".ps"}
+_INDEX_HEADER = (
+    "| status | document | sha256 | size | added | source note |\n"
+    "|---|---|---|---|---|---|\n"
+)
+
+
+def _sha256(path: Path, limit: int = 64 * 1024 * 1024) -> str:
+    """Hash the first ``limit`` bytes. Enough to identify a document, cheap on a 400MB scan."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while chunk := fh.read(1 << 20):
+            h.update(chunk)
+            limit -= len(chunk)
+            if limit <= 0:
+                break
+    return h.hexdigest()[:12]
+
+
+def _index_rows() -> dict[str, str]:
+    """Existing INDEX.md rows, keyed by document path. Rows are never rewritten by rx —
+    status is maintained by whoever read the document."""
+    if not CORPUS_INDEX.exists():
+        return {}
+    rows: dict[str, str] = {}
+    for line in CORPUS_INDEX.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 6 and cells[0] not in ("status", "---"):
+            rows[cells[1].strip("`")] = line
+    return rows
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """Register new documents in library/corpus/ into its INDEX.md reading queue."""
+    CORPUS.mkdir(parents=True, exist_ok=True)
+    known = _index_rows()
+    found = [
+        p for p in sorted(CORPUS.rglob("*"))
+        if p.is_file() and p.suffix.lower() in DOC_SUFFIXES
+        # The corpus dir's own committed files are not corpus documents.
+        and not (p.parent == CORPUS and p.name in ("INDEX.md", "README.md"))
+    ]
+    if not found:
+        print(yellow(f"  no documents in {CORPUS.relative_to(ROOT).as_posix()}/"))
+        print(dim("  drop PDFs/EPUBs there (gitignored), then re-run ingest"))
+        return 0
+
+    new_rows: list[str] = []
+    for doc in found:
+        rel = doc.relative_to(CORPUS).as_posix()
+        if rel in known:
+            continue
+        size_mb = doc.stat().st_size / 1e6
+        new_rows.append(
+            f"| unread | `{rel}` | `{_sha256(doc)}` | {size_mb:.1f} MB | {today()} | - |"
+        )
+        print(green("queued ") + rel)
+
+    if new_rows:
+        body = CORPUS_INDEX.read_text(encoding="utf-8") if CORPUS_INDEX.exists() else ""
+        if "| status |" not in body:
+            body = (body.rstrip() + "\n\n" if body.strip() else "") + _INDEX_HEADER
+        body = body.rstrip("\n") + "\n" + "\n".join(new_rows) + "\n"
+        CORPUS_INDEX.write_text(body, encoding="utf-8", newline="\n")
+
+    unread = sum(1 for line in known.values() if line.split("|")[1].strip() == "unread")
+    print()
+    print(f"  {len(found)} document(s) present, {len(new_rows)} newly queued, "
+          f"{unread + len(new_rows)} unread")
+    print(dim("  never commit the documents themselves - INDEX.md is the committed artifact"))
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Lint the knowledge base: dangling [[links]], untagged claims, orphan results."""
     problems: list[str] = []
@@ -293,6 +370,16 @@ def cmd_check(args: argparse.Namespace) -> int:
         if note.parent.name in ("sources", "ideas", "syntheses") and \
                 not re.search(r"\[(source|lit|ours|open)\]", text):
             problems.append(f"{rel}: no evidence tags — every note needs them")
+
+    for doc, line in _index_rows().items():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        status, note = cells[0], cells[5].strip("`")
+        if status == "noted" and (note in ("-", "") or not (ROOT / note).exists()):
+            problems.append(
+                f"library/corpus/INDEX.md: '{doc}' marked noted but its source note is missing")
+        if status not in ("unread", "reading", "noted", "skipped"):
+            problems.append(
+                f"library/corpus/INDEX.md: '{doc}' has unknown status {status!r}")
 
     for results in PROJECTS.rglob("results/*.json"):
         try:
@@ -322,6 +409,7 @@ COMMANDS = {
     "projects": cmd_projects,
     "new-project": cmd_new_project,
     "new": cmd_new,
+    "ingest": cmd_ingest,
     "check": cmd_check,
 }
 
@@ -334,6 +422,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor")
     sub.add_parser("projects")
     sub.add_parser("check")
+    sub.add_parser("ingest")
 
     p_np = sub.add_parser("new-project")
     p_np.add_argument("name", help="human name; slugified for the directory")

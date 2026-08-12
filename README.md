@@ -23,6 +23,7 @@ here.**
 | [`docs/`](docs/) | The method, the toolchain, how to start a project |
 | [`templates/`](templates/) | Copy-paste starting points for notes and projects |
 | [`library/`](library/) | Cross-project knowledge: sources, atomic ideas, syntheses |
+| [`library/corpus/`](library/corpus/) | The raw pile of papers, theses, and books. Gitignored — [`INDEX.md`](library/corpus/INDEX.md) is what's committed |
 | [`projects/`](projects/) | Self-contained PoCs, one directory each |
 | [`tools/`](tools/) | Shared scripts |
 | [`.claude/agents/`](.claude/agents/) | One agent per pipeline stage — see [`docs/hive.md`](docs/hive.md) |
@@ -70,12 +71,21 @@ Full details in [`docs/toolchain.md`](docs/toolchain.md).
 
 ## Working with agents
 
-The pipeline stages map one-to-one onto subagents, and each owns a **disjoint set of
-files** — one writer per path — so several can run at once without coordinating.
-`lit-scout` writes source notes, `idea-extractor` writes ideas, `synthesist` writes
-syntheses, `preregistrar` writes claims and experiment docs, and `falsifier` and
-`run-auditor` write nothing at all: they report, and whoever owns the file decides what to
-change. Projects add their own agents for their own modules.
+This is an AI-first factory: agents do the acquiring, reading, decomposing, building, and
+attacking. The pipeline stages map one-to-one onto subagents, and each owns a **disjoint set
+of files** — one writer per path — so several run at once without coordinating.
+
+`lit-scout` searches for material and downloads what it can legally get into
+`library/corpus/`; `corpus-reader` works through the queue one document at a time and writes
+source notes with page locators; `idea-extractor` and `synthesist` distil those into ideas
+and syntheses; `decomposer` cuts a big question into attackable sub-problems; `preregistrar`
+fixes the metric and threshold before any code exists; and `falsifier` and `run-auditor`
+write nothing at all — they report, and whoever owns the file decides what to change.
+Projects add their own agents for their own modules.
+
+For a hard question, spawn agents with **different lenses** rather than the same lens N
+times. Where the lenses disagree is where the real uncertainty is — and identical agents on
+one base model make identical mistakes.
 
 Roster and dispatch patterns: [`docs/hive.md`](docs/hive.md).
 
