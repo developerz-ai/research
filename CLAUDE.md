@@ -50,6 +50,7 @@ The failure mode this prevents: a `[source]` claim quietly promoting itself to b
 | `library/ideas/` | One file per atomic idea. Reusable across projects. |
 | `library/syntheses/` | Combinations across sources. The point of the repo. |
 | `library/leads/` | **Discoveries** — things worth more research, scored and gated. What the repo produces of its own. |
+| `articles/` | Findings worth sharing, written for outsiders. Concise, every sentence referenced. |
 | `projects/NNN-slug/` | Self-contained PoC. Own venv, own `CLAUDE.md`, own agents. |
 | `tools/` | Shared scripts. |
 | `.claude/agents/` | Repo-wide pipeline agents. Roster + dispatch → `docs/hive.md`. |

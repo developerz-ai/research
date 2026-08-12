@@ -25,6 +25,7 @@ here.**
 | [`library/`](library/) | Cross-project knowledge: sources, atomic ideas, syntheses |
 | [`library/corpus/`](library/corpus/) | The raw pile of papers, theses, and books. Gitignored — [`INDEX.md`](library/corpus/INDEX.md) is what's committed |
 | [`library/leads/`](library/leads/) | **Discoveries** — things worth more research, scored and gated |
+| [`articles/`](articles/) | Findings worth sharing. Concise, and every sentence carries a reference |
 | [`projects/`](projects/) | Self-contained PoCs, one directory each |
 | [`tools/`](tools/) | Shared scripts |
 | [`.claude/agents/`](.claude/agents/) | One agent per pipeline stage — see [`docs/hive.md`](docs/hive.md) |

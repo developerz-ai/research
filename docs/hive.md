@@ -35,6 +35,7 @@ Repo-wide, in `.claude/agents/`. Available from every project.
 | `falsifier` | verdict | — | ✔ |
 | `run-auditor` | verdict | — | ✔ |
 | `lead-hunter` | discovery | `library/leads/*.md` | |
+| `writer` | publication | `articles/*.md` | |
 
 Project-scoped agents live in `projects/NNN-slug/.claude/agents/` and are discovered when
 the working directory is inside that project. They own that project's source files.
@@ -109,6 +110,14 @@ leaves no record that there was a problem.
 **After a result, especially a null.** `lead-hunter` over the verdict, the run records, and
 the "what this cannot conclude" section. A null is where the assumptions become visible;
 `uv run tools/rx.py leads` is where the output lands, ranked and gated.
+
+**When a finding is worth sharing.** `writer`, and only after `falsifier` and `run-auditor`
+have both been through it. An article is the one artifact here aimed at someone who was not
+in the room, so every factual sentence carries a reference key — `ours:` for our code and
+measurements at a fixed SHA, `corpus:` for a document we hold **with a page locator**, `lit:`
+for published work with its replication status, `src:` for what an interested party asserted.
+A number that cannot be walked back to a committed run record does not go in. Neither does a
+lead: leads are questions.
 
 ## The loop
 

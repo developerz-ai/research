@@ -261,7 +261,9 @@ def cmd_new(args: argparse.Namespace) -> int:
     """Create a source, idea, synthesis, lead, claim, or experiment note from a template."""
     kind, slug = args.kind, slugify(args.slug)
     fields = dict(slug=slug, date=today(), title=args.slug)
-    if kind == "lead":
+    if kind == "article":
+        render(TEMPLATES / "article.md", ARTICLES / f"{slug}.md", **fields)
+    elif kind == "lead":
         # Leads carry the lead- prefix in the filename so the queue is greppable.
         render(TEMPLATES / "lead.md", LEADS / f"lead-{slug}.md", **fields)
     elif kind in ("source", "idea", "synthesis"):
@@ -366,6 +368,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 LEADS = LIBRARY / "leads"
+ARTICLES = ROOT / "articles"
 _AXES = ("kill", "novelty", "discrimination", "load")
 
 
@@ -522,6 +525,19 @@ def cmd_check(args: argparse.Namespace) -> int:
             problems.append(
                 f"library/corpus/INDEX.md: '{doc}' has unknown status {status!r}")
 
+    # An article is the one thing here a stranger reads. Every repo path it cites must
+    # resolve, and an unreferenced article is opinion with a byline.
+    for art in ARTICLES.glob("*.md"):
+        if art.name == "README.md":
+            continue
+        text = art.read_text(encoding="utf-8", errors="replace")
+        rel = art.relative_to(ROOT).as_posix()
+        for path in set(re.findall(r"`((?:projects|library|tools)/[\w./-]+)`", text)):
+            if not (ROOT / path).exists() and "NNN" not in path and "E00N" not in path:
+                problems.append(f"{rel}: cites a path that does not exist - {path}")
+        if not re.search(r"\[(ours|lit|corpus|src):", text):
+            problems.append(f"{rel}: no reference keys - every factual sentence needs one")
+
     for probe in PROJECTS.rglob("explore/*.json"):
         try:
             rec = json.loads(probe.read_text(encoding="utf-8"))
@@ -605,8 +621,8 @@ def main(argv: list[str] | None = None) -> int:
     p_np.add_argument("name", help="human name; slugified for the directory")
 
     p_new = sub.add_parser("new")
-    p_new.add_argument("kind",
-                       choices=["source", "idea", "synthesis", "lead", "claim", "experiment"])
+    p_new.add_argument("kind", choices=["source", "idea", "synthesis", "lead", "article",
+                                        "claim", "experiment"])
     p_new.add_argument("slug")
     p_new.add_argument("--project", help="required for claim/experiment")
 
