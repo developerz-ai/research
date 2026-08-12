@@ -1,6 +1,15 @@
 # research
 
-Research monorepo for developerz.ai. Many independent projects. Each takes an idea — from a book, paper, or talk — and finds out whether it's **true**, via a runnable PoC plus documentation.
+Research monorepo for developerz.ai. A factory for research topics: many independent
+projects, one fixed pipeline. Each takes an idea — from a book, paper, or talk — and finds
+out whether it's **true**, via a runnable PoC plus documentation.
+
+Subjects are not restricted to AI. Empirical sciences and advanced mathematics are in
+scope, on one condition: the project must reach a **falsifiable measurement on the reference
+hardware**. Where the headline question cannot (most of physics), the project says so
+explicitly in writing *before* the first run, and tests the reachable sub-question without
+implying it settled the original — see `projects/002-ftl-axiom-search/notes/out-of-scope-ftl.md`
+for the worked example.
 
 Output = **documented verdicts**, not products. A cleanly-measured negative result is a success. Never soften one.
 
@@ -39,8 +48,12 @@ The failure mode this prevents: a `[source]` claim quietly promoting itself to b
 | `library/sources/` | One file per book/paper/talk consumed. What was said, neutrally, with locators. |
 | `library/ideas/` | One file per atomic idea. Reusable across projects. |
 | `library/syntheses/` | Combinations across sources. The point of the repo. |
-| `projects/NNN-slug/` | Self-contained PoC. Own venv, own `CLAUDE.md`. |
+| `projects/NNN-slug/` | Self-contained PoC. Own venv, own `CLAUDE.md`, own agents. |
 | `tools/` | Shared scripts. |
+| `.claude/agents/` | Repo-wide pipeline agents. Roster + dispatch → `docs/hive.md`. |
+
+Ideas are **cross-project property** and live only in `library/ideas/`. Never file one under
+a project — the transfer of an idea between projects is the point of the repo.
 
 Project numbers are assigned in creation order, never changed, never reused — links stay stable.
 
@@ -119,6 +132,7 @@ Discover depth via `rx.py help` — do not memorise or duplicate the catalog her
 | Read this | Before |
 |---|---|
 | `docs/method.md` | Writing any note, or designing an experiment |
+| `docs/hive.md` | Dispatching agents — who owns which files, and why they are disjoint |
 | `docs/toolchain.md` | Touching env, CUDA, native/C code, or VRAM budgets |
 | `docs/starting-a-project.md` | Creating `projects/NNN-*` |
 | `projects/*/CLAUDE.md` | Touching that project |

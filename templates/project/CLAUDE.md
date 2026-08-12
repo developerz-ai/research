@@ -13,6 +13,18 @@ The single sentence this project exists to answer.
 |---|---|---|
 | `claim-...` | | `[open]` |
 
+## Agents
+
+Project agents live in `.claude/agents/` here and own **disjoint files** — one writer per
+path, so they can run in parallel with no coordination.
+
+| Agent | Owns | Use for |
+|---|---|---|
+| | | |
+
+Repo-wide agents apply too: `lit-scout`, `idea-extractor`, `synthesist`, `preregistrar`,
+`falsifier`, `run-auditor`. Roster and dispatch patterns: `../../docs/hive.md`.
+
 ## Commands
 ```bash
 uv sync                                   # install

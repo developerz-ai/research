@@ -23,6 +23,12 @@ The vendor's own numbers (60×–1000× smaller beating larger) are **not** unde
 name no baseline, no eval, and no task distribution, so they are not testable as stated.
 We test the mechanism they imply, on our own models.
 
+## Agents
+
+No project-specific agents yet. Repo-wide ones apply: `lit-scout`, `idea-extractor`,
+`synthesist`, `preregistrar`, `falsifier`, `run-auditor`. Roster and dispatch patterns:
+`../../docs/hive.md`. `falsifier` and `run-auditor` before any verdict here.
+
 ## Commands
 ```bash
 uv sync --extra dev                       # install
