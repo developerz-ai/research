@@ -1,8 +1,13 @@
 # The hive — how agents are dispatched in this repo
 
-This repo is an AI-first factory for research topics. Agents do the acquiring, the reading,
-the decomposing, the building, and the attacking. The pipeline is fixed; only the subject
-changes.
+This repo is an AI-first factory for research topics. Think of it as a room full of very
+capable people working the same problem from different desks: one is downloading papers, one
+is reading a thesis with a pen, two are arguing about whether the metric measures what it
+claims, one is trying to break yesterday's result, and someone at the front is keeping track
+of what is actually known. Agents do the acquiring, reading, decomposing, building, and
+attacking. The coordinator holds the thread and decides what is true.
+
+The pipeline is fixed; only the subject changes.
 
 ```
 acquire ──► source ──► idea ──► synthesis ──► claim ──► experiment ──► verdict
@@ -29,6 +34,7 @@ Repo-wide, in `.claude/agents/`. Available from every project.
 | `preregistrar` | claim + experiment | `projects/*/notes/claim-*.md`, `projects/*/experiments/E*.md` | |
 | `falsifier` | verdict | — | ✔ |
 | `run-auditor` | verdict | — | ✔ |
+| `lead-hunter` | discovery | `library/leads/*.md` | |
 
 Project-scoped agents live in `projects/NNN-slug/.claude/agents/` and are discovered when
 the working directory is inside that project. They own that project's source files.
@@ -99,6 +105,29 @@ with no interaction.
 adversarially, then any project-specific auditor. All read-only, all parallelisable, none of
 them able to quietly fix what they find — which is the point, because a fix by the finder
 leaves no record that there was a problem.
+
+**After a result, especially a null.** `lead-hunter` over the verdict, the run records, and
+the "what this cannot conclude" section. A null is where the assumptions become visible;
+`uv run tools/rx.py leads` is where the output lands, ranked and gated.
+
+## The loop
+
+The coordinator runs passes, not a single fan-out:
+
+```
+status/check/leads  ->  dispatch (parallel, disjoint, multi-angle)
+        ^                              |
+        |                              v
+   re-dispatch  <-  audit (read-only)  <-  read what came back
+```
+
+Each pass should close a work item, kill a lead, or produce a new one. A pass that does none
+of those is a signal to stop and say why — blocked on a decision, or the remaining work is
+not worth its cost.
+
+Two things the coordinator never delegates: **whether a number is believed**, and **the
+verdict**. Agents report; the coordinator decides and writes it down with what it cannot
+conclude.
 
 ## Rules that apply to every agent
 

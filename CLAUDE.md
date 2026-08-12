@@ -45,9 +45,11 @@ The failure mode this prevents: a `[source]` claim quietly promoting itself to b
 |---|---|
 | `docs/` | Method, toolchain, project kickoff. Load on demand. |
 | `templates/` | Copy when starting a source/idea/claim/experiment/project. |
+| `library/corpus/` | The raw pile — papers, theses, books. **Gitignored**; `INDEX.md` is the committed record. |
 | `library/sources/` | One file per book/paper/talk consumed. What was said, neutrally, with locators. |
 | `library/ideas/` | One file per atomic idea. Reusable across projects. |
 | `library/syntheses/` | Combinations across sources. The point of the repo. |
+| `library/leads/` | **Discoveries** — things worth more research, scored and gated. What the repo produces of its own. |
 | `projects/NNN-slug/` | Self-contained PoC. Own venv, own `CLAUDE.md`, own agents. |
 | `tools/` | Shared scripts. |
 | `.claude/agents/` | Repo-wide pipeline agents. Roster + dispatch → `docs/hive.md`. |
@@ -59,9 +61,15 @@ Project numbers are assigned in creation order, never changed, never reused — 
 
 ## Pipeline
 ```
-source ──► idea ──► synthesis ──► claim ──► experiment ──► verdict
+acquire ──► source ──► idea ──► synthesis ──► claim ──► experiment ──► verdict
+                            │                                    │
+                            └──────────────► lead ◄──────────────┘
 ```
 Each arrow is where a claim earns passage. Details → `docs/method.md`.
+
+Leads flow **out** of the pipeline as much as into it: a verdict — especially a null one —
+is the richest source of things worth more research. `library/leads/README.md` holds the
+scoring gates.
 
 ## Stack
 | | |
@@ -86,10 +94,52 @@ Never branch on vendor in experiment code. Call `pick_device()` / `autocast_dtyp
 
 `RESEARCH_DEVICE=cpu|cuda|auto` overrides detection for any run.
 
+## Working a project — the coordinator protocol
+
+When told *"let's work on `projects/NNN-slug`"*, you are the coordinator. You hold the
+thread and decide what is true; the hive does the work.
+
+**1. Find out where it's at — before proposing anything.**
+```bash
+uv run tools/rx.py status NNN     # readiness, experiment states, orphan results, claims
+uv run tools/rx.py check          # dangling links, untagged notes, incomplete run records
+uv run tools/rx.py leads          # the discovery queue, ranked
+```
+Then read that project's `CLAUDE.md` — its **Start here** section is the work queue, and its
+preventive rules are the things an agent will otherwise violate with no error to warn it.
+If `status` says the venv is not synced, that is step one and `<cli> doctor` is step two: a
+CPU-only torch wheel is a silent failure, not an error.
+
+**2. Dispatch the hive.** Roster and ownership: `docs/hive.md`.
+- Everything independent goes out **in parallel, on disjoint files**. One writer per path is
+  what makes that safe — no locking, no coordination.
+- A hard question gets **several agents at different angles**, not the same angle N times.
+  Where the lenses disagree is where the real uncertainty is; identical agents on one base
+  model make identical mistakes.
+- Read-only agents (`falsifier`, `run-auditor`, `contamination-auditor`) run *after* work
+  lands, never as a substitute for it.
+
+**3. Loop.** Dispatch → read what came back → audit → re-dispatch. Each pass should either
+close a work item, kill a lead, or produce a new one. Stop when the queue is empty, the next
+step is blocked on something only the user can decide, or the remaining work is not worth
+its cost — and say which.
+
+**4. Never delegate the judgement.** Subagents report; you decide. Specifically:
+- No number is believed until `run-auditor` (provenance) and `falsifier` (adversarial) have
+  been through it.
+- The verdict is written by you, in the experiment doc, with what it *cannot* conclude.
+- After any experiment finishes — especially a null — run `lead-hunter`. A null is where the
+  assumptions become visible, and it is the repo's richest source of new work.
+
+**5. Report honestly.** What ran, what did not, what was skipped and why. A cleanly-measured
+negative is a success. Never soften one.
+
 ## Commands
 ```bash
 # from repo root — the DX entrypoint, no venv needed
 uv run tools/rx.py help          # catalog of every command in the repo
+uv run tools/rx.py status NNN    # readiness + state of one project
+uv run tools/rx.py leads         # discovery queue: what is worth more research
 uv run tools/rx.py doctor        # hardware + backend report
 uv run tools/rx.py new-project "slug"
 uv run tools/rx.py new source|idea|claim|experiment <slug>

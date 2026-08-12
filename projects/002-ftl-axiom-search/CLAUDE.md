@@ -81,6 +81,7 @@ Never start with step 3.
 | `src/ftlaxiom/device.py` | **Only** module allowed to name a vendor backend |
 | `src/ftlaxiom/provenance.py` | Run records |
 | `experiments/` | Preregistrations + verdicts |
+| `explore/` | Scratch scripts and probes. **Nothing here is a result** — see its README |
 | `results/` | Run records (committed) |
 
 ## Project rules

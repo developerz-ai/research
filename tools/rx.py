@@ -115,7 +115,16 @@ def cmd_help(args: argparse.Namespace) -> int:
         print(f"  {bold(name.ljust(width))}  {summary}")
     print()
     print(bold("  pipeline"))
-    print(dim("    source ──► idea ──► synthesis ──► claim ──► experiment ──► verdict"))
+    print(dim("    acquire ──► source ──► idea ──► synthesis ──► claim ──► experiment ──► verdict"))
+    print(dim("                              └──────────► lead ◄──────────┘"))
+    print()
+    print(bold("  coordinating a project"))
+    for line in (
+        "uv run tools/rx.py status NNN   where it is at, and whether it is ready",
+        "uv run tools/rx.py leads        what is worth more research, ranked",
+        "uv run tools/rx.py check        knowledge base lint",
+    ):
+        print(f"    {line}")
     print()
     print(bold("  inside a project"))
     for line in (
@@ -249,10 +258,13 @@ def cmd_new_project(args: argparse.Namespace) -> int:
 
 
 def cmd_new(args: argparse.Namespace) -> int:
-    """Create a source, idea, claim, or experiment note from a template."""
+    """Create a source, idea, synthesis, lead, claim, or experiment note from a template."""
     kind, slug = args.kind, slugify(args.slug)
     fields = dict(slug=slug, date=today(), title=args.slug)
-    if kind in ("source", "idea", "synthesis"):
+    if kind == "lead":
+        # Leads carry the lead- prefix in the filename so the queue is greppable.
+        render(TEMPLATES / "lead.md", LEADS / f"lead-{slug}.md", **fields)
+    elif kind in ("source", "idea", "synthesis"):
         dest = LIBRARY / f"{kind}s" / f"{slug}.md"
         render(TEMPLATES / f"{kind}.md", dest, **fields)
     elif kind == "claim":
@@ -353,6 +365,135 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+LEADS = LIBRARY / "leads"
+_AXES = ("kill", "novelty", "discrimination", "load")
+
+
+def _leads() -> list[dict]:
+    """Parse lead notes into sortable records. Gates are applied here, not by the reader."""
+    out = []
+    for path in sorted(LEADS.glob("lead-*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        scores = {ax: int(m.group(1)) for ax in _AXES
+                  if (m := re.search(rf"\b{ax}=(\d)", text))}
+        status = (m.group(1).strip("`") if (m := re.search(r"\*\*Status:\*\*\s*(\S+)", text))
+                  else "?")
+        origin = (m.group(1).strip("`") if (m := re.search(r"\*\*Origin:\*\*\s*([\w-]+)", text))
+                  else "?")
+        title = next((ln[len("# Lead — "):].strip() for ln in text.splitlines()
+                      if ln.startswith("# Lead")), path.stem)
+        gated = [ax for ax in ("kill", "discrimination", "novelty") if scores.get(ax) == 0]
+        out.append({
+            "path": path, "slug": path.stem, "title": title, "status": status,
+            "origin": origin, "scores": scores, "gated": gated,
+            "total": sum(scores.values()) if len(scores) == len(_AXES) else -1,
+        })
+    return out
+
+
+def cmd_leads(args: argparse.Namespace) -> int:
+    """List the discovery queue: things worth more research, ranked, gates applied."""
+    leads = _leads()
+    if not leads:
+        print(yellow("  no leads yet"))
+        print(dim("  uv run tools/rx.py new lead <slug>   (see library/leads/README.md)"))
+        return 0
+
+    live = [x for x in leads if not x["gated"] and x["status"] in ("open", "claimed")]
+    live.sort(key=lambda x: -x["total"])
+    rest = [x for x in leads if x not in live]
+
+    print()
+    print(bold("  discovery queue") + dim("   kill/novelty/discrimination/load"))
+    print()
+    for lead in live:
+        s = "/".join(str(lead["scores"].get(ax, "?")) for ax in _AXES)
+        print(f"  {green(str(lead['total']).rjust(2))}  {s}  {dim(lead['origin'].ljust(20))}"
+              f"  {lead['title']}")
+        print(f"      {dim(lead['path'].relative_to(ROOT).as_posix())}")
+    if rest:
+        print()
+        print(bold("  not in the queue"))
+        for lead in rest:
+            why = ("gated on " + ", ".join(lead["gated"])) if lead["gated"] else lead["status"]
+            print(f"  {yellow('--')}  {lead['title']}  {dim('(' + why + ')')}")
+    print()
+    print(dim("  score is a sort key, not a truth. cheapest-to-kill first."))
+    print()
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Readiness and state of one project: is it set up, and where is it at?"""
+    matches = [p for p in _projects() if args.project in p.name]
+    if not matches:
+        die(f"no project matching {args.project!r}; try: uv run tools/rx.py projects")
+    proj = matches[0]
+
+    print()
+    print(bold(f"  {proj.name}"))
+
+    print()
+    print(bold("  readiness"))
+    venv = proj / ".venv"
+    pyproject = proj / "pyproject.toml"
+    print(f"    pyproject   {green('ok') if pyproject.exists() else yellow('missing')}")
+    print(f"    venv        {green('ok') if venv.exists() else yellow('not synced') + dim('  -> uv sync')}")
+    cli = ""
+    if pyproject.exists():
+        body = pyproject.read_text(encoding="utf-8", errors="replace")
+        if m := re.search(r"^\s*(\w[\w-]*)\s*=\s*\"[\w.]+:app\"", body, re.M):
+            cli = m.group(1)
+    if cli:
+        print(f"    cli         {cli}" + dim(f"   -> uv run {cli} doctor"))
+
+    print()
+    print(bold("  experiments"))
+    exps = sorted((proj / "experiments").glob("E*.md"))
+    results = list((proj / "results").glob("*.json"))
+    if not exps:
+        print(dim("    none preregistered"))
+    for exp in exps:
+        text = exp.read_text(encoding="utf-8", errors="replace")
+        eid = exp.name.split("-")[0]
+        runs = [r for r in results if r.name.startswith(eid)]
+        # A verdict exists when the Verdict section names an outcome. The template's own
+        # "supported / falsified / inconclusive" prompt is stripped first, or every
+        # freshly-scaffolded experiment would report itself as decided.
+        vsec = text.split("## Verdict", 1)[1][:800] if "## Verdict" in text else ""
+        vsec = vsec.replace("supported / falsified / inconclusive", "")
+        decided = re.search(r"(?i)\b(falsified|supported|inconclusive|confounded)\b", vsec)
+        verdict = "verdict" if decided else ("has runs" if runs else "preregistered")
+        colour = green if verdict == "verdict" else (yellow if runs else dim)
+        print(f"    {eid:<6} {colour(verdict.ljust(14))} {len(runs)} run record(s)  "
+              f"{dim(exp.name)}")
+
+    orphans = [r for r in results
+               if not any(r.name.startswith(e.name.split("-")[0]) for e in exps)]
+    if orphans:
+        print()
+        print(f"    {yellow('orphan results')} (a number with no preregistration):")
+        for o in orphans:
+            print(f"      {o.name}")
+
+    print()
+    print(bold("  claims"))
+    for note in sorted((proj / "notes").glob("claim-*.md")):
+        text = note.read_text(encoding="utf-8", errors="replace")
+        cls = m.group(1) if (m := re.search(r"\*\*Class:\*\*\s*`?\[?(\w+)", text)) else "?"
+        print(f"    [{cls}] {note.stem}")
+
+    print()
+    print(bold("  next"))
+    doc = proj / "CLAUDE.md"
+    if doc.exists() and "Start here" in doc.read_text(encoding="utf-8", errors="replace"):
+        print(dim(f"    read {proj.name}/CLAUDE.md -> 'Start here' work queue"))
+    else:
+        print(dim(f"    read {proj.name}/CLAUDE.md"))
+    print()
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Lint the knowledge base: dangling [[links]], untagged claims, orphan results."""
     problems: list[str] = []
@@ -380,6 +521,28 @@ def cmd_check(args: argparse.Namespace) -> int:
         if status not in ("unread", "reading", "noted", "skipped"):
             problems.append(
                 f"library/corpus/INDEX.md: '{doc}' has unknown status {status!r}")
+
+    for probe in PROJECTS.rglob("explore/*.json"):
+        try:
+            rec = json.loads(probe.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(rec, dict) and {"seed", "metrics"} <= set(rec):
+            problems.append(
+                f"{probe.relative_to(ROOT).as_posix()}: run-record shape in explore/ - "
+                "nothing there is a result; move it to results/ or drop the seed/metrics keys")
+
+    for lead in _leads():
+        rel = lead["path"].relative_to(ROOT).as_posix()
+        if len(lead["scores"]) != len(_AXES):
+            missing = [ax for ax in _AXES if ax not in lead["scores"]]
+            problems.append(f"{rel}: unscored axes {', '.join(missing)} - it cannot be ranked")
+        if lead["status"] == "promoted" and "## Route" not in lead["path"].read_text(
+                encoding="utf-8", errors="replace"):
+            problems.append(f"{rel}: marked promoted with no route recorded")
+        if lead["gated"] and lead["status"] == "open":
+            problems.append(
+                f"{rel}: gated on {', '.join(lead['gated'])} but still open - mark it dead")
 
     for results in PROJECTS.rglob("results/*.json"):
         try:
@@ -410,11 +573,21 @@ COMMANDS = {
     "new-project": cmd_new_project,
     "new": cmd_new,
     "ingest": cmd_ingest,
+    "leads": cmd_leads,
+    "status": cmd_status,
     "check": cmd_check,
 }
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to cp1252, which cannot encode the pipeline arrows below and
+    # kills the command with a UnicodeEncodeError. Not worth losing a command over.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(prog="rx", add_help=False)
     sub = parser.add_subparsers(dest="command")
 
@@ -423,12 +596,17 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("projects")
     sub.add_parser("check")
     sub.add_parser("ingest")
+    sub.add_parser("leads")
+
+    p_st = sub.add_parser("status")
+    p_st.add_argument("project", help="project name or fragment, e.g. 002")
 
     p_np = sub.add_parser("new-project")
     p_np.add_argument("name", help="human name; slugified for the directory")
 
     p_new = sub.add_parser("new")
-    p_new.add_argument("kind", choices=["source", "idea", "synthesis", "claim", "experiment"])
+    p_new.add_argument("kind",
+                       choices=["source", "idea", "synthesis", "lead", "claim", "experiment"])
     p_new.add_argument("slug")
     p_new.add_argument("--project", help="required for claim/experiment")
 

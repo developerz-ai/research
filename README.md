@@ -24,20 +24,30 @@ here.**
 | [`templates/`](templates/) | Copy-paste starting points for notes and projects |
 | [`library/`](library/) | Cross-project knowledge: sources, atomic ideas, syntheses |
 | [`library/corpus/`](library/corpus/) | The raw pile of papers, theses, and books. Gitignored — [`INDEX.md`](library/corpus/INDEX.md) is what's committed |
+| [`library/leads/`](library/leads/) | **Discoveries** — things worth more research, scored and gated |
 | [`projects/`](projects/) | Self-contained PoCs, one directory each |
 | [`tools/`](tools/) | Shared scripts |
 | [`.claude/agents/`](.claude/agents/) | One agent per pipeline stage — see [`docs/hive.md`](docs/hive.md) |
 
-The pipeline is deliberately linear:
+The pipeline is deliberately linear, with one loop back:
 
 ```
-source  ──►  idea  ──►  synthesis  ──►  claim  ──►  experiment  ──►  verdict
-(what was    (atomic,   (combine      (falsifiable  (preregistered,  (honest
- said)        reusable)  across        + a metric)   seeded, with a    writeup)
-                         sources)                    baseline)
+acquire ─► source ─► idea ─► synthesis ─► claim ─► experiment ─► verdict
+(find and   (what it  (atomic,  (combine     (falsi-  (preregistered  (honest
+ download)   said,     reusable) across       fiable   seeded,          writeup)
+             located)            sources)     + metric) baselined)
+                           │                                  │
+                           └───────────► lead ◄───────────────┘
+                              (worth more research, scored)
 ```
 
-See [`docs/method.md`](docs/method.md) for what each step demands.
+Leads flow **out** of the pipeline as much as into it — a verdict, especially a null one, is
+the richest source of things worth looking at next. `uv run tools/rx.py leads` shows the
+queue, ranked, with gates applied: a lead that can't be killed cheaply, or where only a
+positive result would be informative, is dead on arrival.
+
+See [`docs/method.md`](docs/method.md) for what each step demands, and
+[`library/leads/README.md`](library/leads/README.md) for the scoring gates.
 
 ## Projects
 

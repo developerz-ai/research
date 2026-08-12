@@ -48,6 +48,7 @@ Never start with step 3. A full sweep that dies at 80% teaches nothing and costs
 |---|---|
 | `src/{{PKG}}/` | Library code + CLI |
 | `experiments/` | Preregistrations and verdicts, `E001-*.md` |
+| `explore/` | Scratch scripts and probes. **Nothing here is a result** |
 | `notes/` | Claims, literature review, working notes |
 | `results/` | Run records (JSON, committed) |
 | `data/` | Inputs. `data/raw/` and `data/cache/` are gitignored |
