@@ -1,0 +1,29 @@
+# Weekly, with minor and patch updates grouped per ecosystem; a major update arrives on its own.
+# The 14-day cooldown lets a compromised release get caught before it reaches us. Security updates
+# are unaffected.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/projects/002-ftl-axiom-search"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "01:00"
+    cooldown:
+      default-days: 14
+    groups:
+      pip-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "uv"
+    directory: "/projects/001-geometric-reasoning"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "01:00"
+    cooldown:
+      default-days: 14
+    groups:
+      uv-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
