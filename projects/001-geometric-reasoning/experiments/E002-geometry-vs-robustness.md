@@ -114,6 +114,42 @@ applied** — E002 ran the full 16-model ladder. The preregistration above says 
 that was an estimate, and the executed population is recorded here and in the amendment log
 rather than by rewriting the preregistration.
 
+### Input-population audit (added 2026-11-04)
+
+The preregistration promises identical inputs — "Same prompts as the flip-rate runs"
+(lines 75-76) and "same item prompts" (line 91). The committed records show the executed
+runs did **not** share an item population:
+
+- **Behaviour side.** Every flip-rate run scored **600 pairs → 1200 items**
+  (`config.n_per_family = 100`, `config.n_pairs = 600`; e.g.
+  `results/E001-gpt2-seed0.json` lines 24-25). E001's four GPT-2 models ran at seeds 0,
+  1, 2; every E001b and E001c run used seed 0 — 24 behaviour records across the 16
+  correlated models.
+- **Geometry side.** Every `results/E002-geom-*.json` profiled **144 pairs → 288 prompts**
+  per model (`config.n_per_family = 24`, `config.max_samples = 288`,
+  `config.n_prompts = 288`, record seed 0; e.g. `results/E002-geom-gpt2.json` lines 6 and
+  21-27).
+- **Overlap.** `items.generate()` draws one `random.Random(seed)` stream sequentially
+  across families in insertion order (`src/geomreason/items.py` lines 277-288), so two
+  populations generated at different `n_per_family` agree **position-for-position only
+  through the first family**: the 24 comparison pairs — **48 of the 288 geometry
+  prompts** — sit at the same positions of the same seeded stream on both sides, and
+  that prefix is the only sharing the code certifies. Beyond it the draws diverge, and
+  the low-entropy families collide by chance (negation has 128 distinct prompts per
+  variant, conditional 48 — `items.py` lines 127-143, 200-231), so **more than 48**
+  geometry prompt strings appear somewhere in the behaviour population as chance
+  duplicates. `inputs.compare()` deliberately measures position-aligned agreement, not
+  set overlap: a chance collision is not a matched input (`src/geomreason/inputs.py`
+  lines 216-222).
+
+The geometry-vs-flip pairing was therefore **cross-sample**, not the identical-inputs
+pairing preregistered above. The confounded verdict does not rest on identical inputs — it
+rests on the partial-correlation structure and the preregistered confound check — so no
+number changes. The disclosure lives here and in the amendment log; the preregistration
+text is left as written, and no file under `results/` was modified. (Reproduction note:
+`config.families` is stored sorted, so a recorded all-families population is regenerated
+with `generate(seed=..., n_per_family=...)` and no family filter.)
+
 ### Primary — relative depth 0.75 (preregistered), n=16, no exclusions
 
 | Descriptor | n | ρ(geom, flip) | ρ(geom, size) | **partial ρ** |
@@ -224,3 +260,4 @@ only size) showed a surviving correlation.
 | 2026-08-11 | created | E001c gave flip rate enough variance to correlate against |
 | 2026-08-11 | verdict function now incorporates the confound check | It reported SUPPORTED on a correlation the check had already disproved on the line above |
 | 2026-11-04 | Executed population recorded: primary n=16 (every measured model, no exclusions), confound check n=12 (the same 16 minus the four GPT-2 models) | The preregistration's "n ≈ 15" was an estimate, and its family counts miscounted Qwen3/3.5 as 3 rather than 4; the run used all 16 measured models. The preregistration text is left as written — the executed population is recorded here and in Results. The ≤2B restriction proposed in E001b/E001c was never applied |
+| 2026-11-04 | Input-population audit added to Results: flip-rate runs scored 600 pairs / 1200 items (n_per_family=100 — E001 GPT-2 at seeds 0/1/2, E001b/E001c at seed 0), geometry runs profiled 144 pairs / 288 prompts per model (n_per_family=24, max_samples=288, seed 0), position-aligned overlap confined to the first family's 48 prompts | The preregistration's identical-inputs premise (lines 75-76, 91) did not hold as executed — the geometry pass drew its own population from the same generator. Recorded here and in Results; preregistration text left as written; no results file modified |

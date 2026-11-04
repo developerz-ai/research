@@ -67,9 +67,17 @@ proper controls, adding controls will not create a correlation.
 
 Asymmetric evidential value is a reason to run it, not a flaw to hide.
 
+As executed (disclosed 2026-11-04), the E002 pairing was also **cross-sample**: the
+geometry pass profiled its own 288-prompt draw (24 pairs/family, seed 0) against
+flip-rate runs of 1200 items (100 pairs/family) — only the first family's 48 prompts
+coincide. That is not the identical-inputs pairing the E002 preregistration described;
+the confounded verdict does not rest on identical inputs. Audit:
+`experiments/E002-geometry-vs-robustness.md`.
+
 ## Status log
 
 | Date | Class | Change |
 |---|---|---|
 | 2026-08-11 | `[open]` | created, falsifier fixed before implementation |
 | 2026-08-11 | `[ours]` | **Confounded, trending falsified.** E002: best surviving partial ρ = 0.006 vs a 0.3 falsification threshold. The apparent +0.692 was the GPT-2 family sitting in one corner — old models have both worse geometry and worse reasoning, with nothing linking the two. Scoped: our descriptors, one depth, 16 uncontrolled models, no intervention tested. |
+| 2026-11-04 | `[ours]` | Input-population disclosure: E002's geometry pass profiled 288 prompts (24 pairs/family, seed 0) while the flip-rate runs scored 1200 items (100 pairs/family); only the first family's 48 prompts coincide (one RNG stream across families in `items.generate`). The geometry-vs-flip pairing is therefore cross-sample; the confounded verdict stands — it does not rest on identical inputs. Future geosweep runs are matched by construction and `geom inputs` verifies. |

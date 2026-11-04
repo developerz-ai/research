@@ -122,6 +122,12 @@ ladder, including Qwen2.5-7B and Qwen3.5-9B — see
   the source's ~124M claim. Needs a transformers version matching `DeepseekV4ForCausalLM`.
 - **Seeds.** E001b/E001c are single-seed. The large gaps are safe (E001 spread was ≤0.06) but
   the Qwen3-0.6B vs Qwen3-1.7B near-tie (0.483 vs 0.498) is not resolvable at one seed.
+- **Input populations (disclosed 2026-11-04).** E002's geometry pass profiled 288 prompts
+  (24 pairs/family) against flip-rate runs of 1200 items (100 pairs/family) — only the first
+  family's prompts coincide. The verdict is unaffected but the identical-inputs premise in
+  the E002 preregistration did not hold as executed; see the input-population audit in
+  [E002](experiments/E002-geometry-vs-robustness.md). Future geosweep runs are matched to
+  each model's flip-rate record and `geom inputs` verifies.
 - **E001d** — add a digit-separated variant of the `arithmetic` family. Later reading
   ([[library/ideas/tokenization-limits-reasoning]]) says a BPE tokenizer can make arithmetic
   impossible regardless of reasoning ability, and `arithmetic` had our lowest flip rate with
