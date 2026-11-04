@@ -105,7 +105,16 @@ uv run geom correlate --experiment E002       # join with flip rate, partial cor
 Run 2026-08-11, RTX 3090. 16 models with both a flip-rate measurement and a geometry
 profile. Records: `results/E002-geom-*.json`, `results/E002-correlation.json`.
 
-### Primary — relative depth 0.75 (preregistered)
+**Executed population: n=16 — every measured model, no exclusions**
+(`results/E002-correlation.json` → `metrics.n_models = 16`; `config.models` lists the 16 ids).
+That set is 4 GPT-2 (E001) + 7 (E001b) + 5 (E001c), and it includes Qwen2.5-7B and
+Qwen3.5-9B. **The ≤2B restriction proposed in
+[E001b](E001b-modern-small-models.md) and [E001c](E001c-current-generation.md) was never
+applied** — E002 ran the full 16-model ladder. The preregistration above says "n ≈ 15";
+that was an estimate, and the executed population is recorded here and in the amendment log
+rather than by rewriting the preregistration.
+
+### Primary — relative depth 0.75 (preregistered), n=16, no exclusions
 
 | Descriptor | n | ρ(geom, flip) | ρ(geom, size) | **partial ρ** |
 |---|---|---|---|---|
@@ -114,7 +123,10 @@ profile. Records: `results/E002-geom-*.json`, `results/E002-correlation.json`.
 | intrinsic_dim_twonn | 16 | +0.850 | +0.694 | **+0.692** |
 | anisotropy | 16 | −0.318 | −0.565 | **+0.420** |
 
-### Confound check — same, excluding the GPT-2 family (preregistered)
+### Confound check — same, excluding the GPT-2 family (preregistered), n=12
+
+**n=12 = the same 16 measured models minus the four GPT-2 models.** Nothing else is removed;
+Qwen2.5-7B and Qwen3.5-9B stay in.
 
 | Descriptor | n | ρ(geom, flip) | ρ(geom, size) | **partial ρ** |
 |---|---|---|---|---|
@@ -127,39 +139,44 @@ profile. Records: `results/E002-geom-*.json`, `results/E002-correlation.json`.
 
 **Preregistered.**
 
-1. **The primary test appears to pass, and it is an artefact.** `intrinsic_dim_twonn`
-   reaches partial ρ = +0.692, above the 0.5 support threshold. Removing the four GPT-2
-   models sends it to **+0.006**. The entire correlation is those four models sitting in one
-   corner: they are old, and they have both worse geometry and worse reasoning. Nothing
-   connects the two except vintage.
+1. **The primary test appears to pass, and it is an artefact.** On the **n=16** primary —
+   every measured model, no exclusions — `intrinsic_dim_twonn` reaches partial ρ = +0.692,
+   above the 0.5 support threshold. On the **n=12** confound check (the same 16 minus the four
+   GPT-2 models) the same descriptor sends to **+0.006**. The entire correlation is those
+   four models sitting in one corner: they are old, and they have both worse geometry and
+   worse reasoning. Nothing connects the two except vintage.
 
 2. **Two descriptors change sign** when GPT-2 is removed (participation_ratio +0.031 →
-   −0.392; effective_rank +0.037 → −0.201). With n=12 and four descriptors, a sign flip of
-   that size is what noise looks like. None of these is a stable measurement.
+   −0.392; effective_rank +0.037 → −0.201). With n=12 (the same 16 minus the four GPT-2
+   models) and four descriptors, a sign flip of that size is what noise looks like. None of
+   these is a stable measurement.
 
-3. **The raw correlations are strong and entirely explained by size.** Every descriptor
-   correlates with flip rate at ρ = 0.57–0.85 *before* controlling. Nearly all of it is
-   mediated by parameter count: bigger models have higher intrinsic dimension and reason
-   better, and geometry adds nothing on top. This is the exact shape of confound the design
-   was built to detect.
+3. **The raw correlations are strong and entirely explained by size.** On the n=16 primary,
+   every descriptor correlates with flip rate at ρ = 0.57–0.85 *before* controlling. Nearly
+   all of it is mediated by parameter count: bigger models have higher intrinsic dimension
+   and reason better, and geometry adds nothing on top. This is the exact shape of confound
+   the design was built to detect.
 
-4. **Anisotropy at +0.420** is the only descriptor in the inconclusive band on the primary
-   test, and it drops to +0.164 without GPT-2. Not a finding.
+4. **Anisotropy at +0.420** (n=16) is the only descriptor in the inconclusive band on the
+   primary test, and it drops to +0.164 without GPT-2 (n=12). Not a finding.
 
 **Post-hoc** (labelled, weaker):
 
-5. The strongest *raw* signal is intrinsic dimension (ρ = +0.850 with flip rate), consistent
-   with [[library/ideas/token-geometry-and-anisotropy]] — but it tracks size, not capability
-   given size. If a geometric quantity ever does predict reasoning independently, intrinsic
-   dimension is still the one to watch; this design simply cannot separate it from scale.
+5. The strongest *raw* signal is intrinsic dimension (ρ = +0.850 with flip rate, on the n=16
+   primary), consistent with [[library/ideas/token-geometry-and-anisotropy]] — but it tracks
+   size, not capability given size. If a geometric quantity ever does predict reasoning
+   independently, intrinsic dimension is still the one to watch; this design simply cannot
+   separate it from scale.
 
 ## Verdict
 
 **`claim-geometry-predicts-robustness` → CONFOUNDED, trending toward falsified.**
 
 No geometric descriptor predicts reasoning robustness once parameter count is controlled and
-the GPT-2 family is removed. Best surviving |partial ρ| is **0.006**, against a preregistered
-falsification threshold of 0.3.
+the GPT-2 family is removed. The **+0.692** that would have read as support is the **n=16**
+primary — every measured model, no exclusions — while the best surviving |partial ρ|,
+**0.006**, is the **n=12** confound check, the same 16 minus the four GPT-2 models. That is
+against a preregistered falsification threshold of 0.3.
 
 Under the preregistered rule the primary test alone would read SUPPORTED. **The confound
 check — written into the preregistration before any number existed — is what kills it.**
@@ -185,8 +202,9 @@ included, guarded by `tests/test_verdict.py`.
   measured the wrong quantity — that objection is unanswerable while "geometric density"
   remains undefined ([[library/sources/sophontic-website]]).
 - **n=16, and the models differ in everything at once** — data, tokenizer, depth, recipe,
-  vintage. Parameter count is a weak control, which is precisely why the result is
-  "confounded" rather than "falsified".
+  vintage. The 16 are every measured model, with no exclusions (Qwen2.5-7B and Qwen3.5-9B
+  included; the ≤2B restriction proposed in E001b/E001c was not applied). Parameter count is
+  a weak control, which is precisely why the result is "confounded" rather than "falsified".
 - **Correlational by construction.** Only a matched-training experiment can separate cause.
 
 **Consequence.** The cheap screen has been run and it found nothing. Under this project's
@@ -205,9 +223,4 @@ only size) showed a surviving correlation.
 |---|---|---|
 | 2026-08-11 | created | E001c gave flip rate enough variance to correlate against |
 | 2026-08-11 | verdict function now incorporates the confound check | It reported SUPPORTED on a correlation the check had already disproved on the line above |
-
-## Amendment log
-
-| Date | Change | Why |
-|---|---|---|
-| 2026-08-11 | created | E001c gave flip rate enough variance to correlate against |
+| 2026-11-04 | Executed population recorded: primary n=16 (every measured model, no exclusions), confound check n=12 (the same 16 minus the four GPT-2 models) | The preregistration's "n ≈ 15" was an estimate, and its family counts miscounted Qwen3/3.5 as 3 rather than 4; the run used all 16 measured models. The preregistration text is left as written — the executed population is recorded here and in Results. The ≤2B restriction proposed in E001b/E001c was never applied |

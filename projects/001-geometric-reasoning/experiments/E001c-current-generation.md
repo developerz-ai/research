@@ -186,9 +186,23 @@ matched compute, not merely land on it.
 - Single seed. E001 showed seed-to-seed spread ≤0.06, so the large gaps here are safe, but
   the Qwen3-0.6B vs Qwen3-1.7B near-tie (0.483 vs 0.498) is **not** resolvable at one seed.
 
-**Consequence for E002.** Flip rate now spans 0.048 → 0.968 across 12 models. That is ample
-variance for correlating geometric descriptors against, and the ladder should be restricted
-to **≤2B**, where the metric still discriminates.
+**Consequence for E002.** Flip rate spans 0.048 → 0.968. Two populations live in this
+section and they are not the same size:
+
+- **This run's own measured models: 5.** Qwen3-0.6B (0.483), Qwen3-1.7B (0.498),
+  Qwen3.5-2B (0.772), SmolLM3-3B (0.562), Qwen3.5-9B (0.968). The lower end of the range
+  (0.048) is GPT-2's, from E001 — not this run's.
+- **One excluded run, in neither population.** `nanowhale-100m-base` was excluded before it
+  was ever a valid measurement (partly randomly-initialised weights, 0.013, quarantined in
+  `results/superseded/`).
+- **The ladder handed to E002: 16 models** — 4 GPT-2 (E001) + 7 (E001b) + 5 (this run) —
+  which is what `results/E002-correlation.json` records (`metrics.n_models = 16`). That is
+  ample variance for correlating geometric descriptors against.
+
+**Proposal — proposed and not applied.** The ladder should be restricted to **≤2B**, where
+the metric still discriminates. **Not applied:** E002 ran the full 16-model ladder, including
+Qwen2.5-7B and Qwen3.5-9B — see [E002](E002-geometry-vs-robustness.md). The proposal stands
+as written; the executed population does not follow it.
 
 ## Amendment log
 
@@ -198,9 +212,4 @@ to **≤2B**, where the metric still discriminates.
 | 2026-08-11 | `load_model` casts device+dtype together | `dtype=` at load time left a mixed-precision checkpoint partly fp32; nanowhale failed at the first matmul |
 | 2026-08-11 | `load_model` refuses checkpoints with missing keys | nanowhale loaded with randomly-initialised experts and scored 0.013. A silently-random model must never produce a number. |
 | 2026-08-11 | E001b's "instrument saturates at 0.80" corrected | Falsified by Qwen3.5-9B at 0.968 on the same items |
-
-## Amendment log
-
-| Date | Change | Why |
-|---|---|---|
-| 2026-08-11 | created | E001b's ladder was a generation behind; model IDs confirmed via the HF API |
+| 2026-11-04 | "Consequence for E002" population corrected; duplicate amendment log merged | This run measured 5 models — `nanowhale-100m-base` was excluded before it was ever a valid measurement — and handed E002 a 16-model ladder, not 12. The ≤2B restriction proposed above was not applied by E002 |
