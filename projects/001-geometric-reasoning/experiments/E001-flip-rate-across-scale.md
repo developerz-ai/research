@@ -174,9 +174,11 @@ discussed below are outside both.
    described by one positional heuristic than by degraded reasoning.
 
 6. The most interesting quantity may be **stickiness rather than flip rate**. It is well
-   defined even when accuracy is at chance, and it fell monotonically with scale in a way
-   flip rate did not (0.913 → 0.922 → 0.772 → 0.793). Worth preregistering as a primary
-   metric in E002 rather than treating as a diagnostic.
+   defined even when accuracy is at chance, and it fell overall with scale (0.913 → 0.922 →
+   0.772 → 0.793) — non-monotonically: gpt2-medium sits above gpt2 and gpt2-xl above
+   gpt2-large at every seed (per `results/E001-*.json`) — while flip rate rose overall
+   (0.048 → 0.171), also non-monotonically. Worth preregistering as a primary metric in E002
+   rather than treating as a diagnostic.
 
 ## Verdict
 
@@ -222,3 +224,4 @@ ladder. Revised plan in `README.md`.
 | 2026-08-11 | `role_swap` family redesigned; first seed-0 sweep discarded | The family perturbed by swapping names, which also swapped positions, so a recency heuristic scored flip rate 1.0 on it. Discarded runs preserved with the full explanation in `results/superseded/`. Guarded permanently by `tests/test_baselines.py` and `geom baselines`. |
 | 2026-08-11 | Added trivial-heuristic baselines to the harness | The confound above was invisible to the preregistered confound list, which assumed item validity rather than measuring it. Admissibility is now checked, not assumed. |
 | 2026-08-11 | Fixed ungrammatical `conditional` question form | "did the alarm rings?" — malformed English is a confound; models were partly scored on it. |
+| 2026-11-04 | Reworded Analysis point 6: stickiness fell *overall* with scale, non-monotonically; flip rate rose overall, also non-monotonically | The previous wording said stickiness fell monotonically "in a way flip rate did not" — false as written: the cited stickiness values rise twice (gpt2-medium above gpt2, gpt2-xl above gpt2-large at every seed), and flip rate also moved (0.048 → 0.171). Wording only; no number changed. |
