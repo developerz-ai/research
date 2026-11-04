@@ -328,6 +328,24 @@ def test_source_naming_undefined_index_is_reported(tree: Path) -> None:
     assert "'nowhere'" in problems[0]
 
 
+def test_removed_index_source_is_reported(tree: Path) -> None:
+    """Deleting the manifest's source declaration must not leave the old pin passing.
+
+    The forward index comparison only visits packages the manifest still names,
+    so removing ``torch = [{ index = "pytorch" }]`` used to leave the lock's
+    cu126 pin unexamined; the locked side is compared too.
+    """
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace('torch = [{ index = "pytorch" }]', ""),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'torch'" in problems[0]
+    assert "cu126" in problems[0]
+    assert "no index source" in problems[0]
+
+
 def test_stale_lock_extra_mismatch_is_reported(tree: Path) -> None:
     """An extra added to the manifest after the lock was written is caught by name."""
     _write(
@@ -340,6 +358,28 @@ def test_stale_lock_extra_mismatch_is_reported(tree: Path) -> None:
     problems = _problems()
     assert len(problems) == 1
     assert "'dev'" in problems[0]
+
+
+def test_stale_lock_extra_constraint_bump_is_reported(tree: Path) -> None:
+    """A constraint bump inside an extra is caught via the extra-scoped requires-dist.
+
+    The lock's ``[package.optional-dependencies]`` carries names only, so bumping
+    the manifest from pytest>=8.0 to pytest>=9.0 passes a name-set comparison;
+    the specifier lives on the marker-scoped record in requires-dist.
+    """
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'dev = ["pytest>=8.0"]',
+            'dev = ["pytest>=9.0"]',
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'pytest'" in problems[0]
+    assert "'dev'" in problems[0]
+    assert "'>=9.0'" in problems[0]
+    assert "'>=8.0'" in problems[0]
 
 
 # ── duplicate directory entries ───────────────────────────────────────────────

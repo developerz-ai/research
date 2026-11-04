@@ -562,8 +562,11 @@ def _lock_divergences(pyproject: Path, lock: Path) -> list[str]:
     manifest changed keeps that name while pinning the old requirements — numpy
     stays at >=1.26 after the manifest moves to numpy>=2. So the recorded root
     requirements ([package.metadata].requires-dist), the uv index sources resolved
-    through [[tool.uv.index]], requires-python, and the extras are each compared
-    against the manifest itself. Every divergence is one string naming what moved.
+    through [[tool.uv.index]] — compared in both directions, so a source deleted
+    from the manifest is caught from the locked side too — requires-python, and
+    the extras (names, and via their extra-scoped requires-dist records the
+    constraints) are each compared against the manifest itself. Every divergence
+    is one string naming what moved.
     """
     try:
         manifest = tomllib.loads(pyproject.read_text(encoding="utf-8"))
@@ -667,8 +670,36 @@ def _lock_divergences(pyproject: Path, lock: Path) -> list[str]:
                     f"'{pkg}' index source resolves to {resolved!r} in the manifest but "
                     f"{locked_index!r} in the lock (run 'uv lock')")
 
-    # Optional dependencies: the lock records names only, so compare the name sets.
+    # The forward pass above only visits packages the manifest still names, so a
+    # source deleted from the manifest leaves the lock's pin unexamined. Compare the
+    # locked side too: any requires-dist entry carrying an index must still have a
+    # surviving manifest source. (Every other shape — a source naming a missing
+    # index, an unresolvable or mismatched one — is reported by the forward pass,
+    # so this fires only where no source survives at all.)
+    declared_sources = {_canonical_name(str(k)) for k in sources}
+    for req_key, entries in locked_reqs.items():
+        pinned = [e for e in entries if e.get("index")]
+        if not pinned or req_key in declared_sources:
+            continue
+        locked_index = str(pinned[0].get("index", "") or "")
+        divergences.append(
+            f"'{req_key}' is pinned to index {locked_index!r} in the lock but the "
+            "manifest declares no index source for it (run 'uv lock')")
+
+    # Optional dependencies: the lock's [package.optional-dependencies] records names
+    # only, so the constraint is compared where uv records it — the extra-scoped
+    # requires-dist entry (marker `extra == '<extra>'`), same as the main dependencies.
     locked_extras = root.get("optional-dependencies", {})
+
+    def _extra_entry(extra_name: str, req_name: str) -> dict[str, object] | None:
+        """The requires-dist record for req_name scoped to this extra, if any."""
+        scoped = re.compile(rf"extra\s*==\s*['\"]{re.escape(extra_name)}['\"]")
+        return next(
+            (e for e in locked_reqs.get(req_name, [])
+             if scoped.search(str(e.get("marker", "")))),
+            None,
+        )
+
     for extra, requirements in project.get("optional-dependencies", {}).items():
         want = sorted(_requirement_parts(str(r))[0] for r in requirements)
         have = sorted(
@@ -680,6 +711,23 @@ def _lock_divergences(pyproject: Path, lock: Path) -> list[str]:
             divergences.append(
                 f"extra {extra!r} is {want} in the manifest but {have} in the lock "
                 "(run 'uv lock')")
+            continue
+        for requirement in [str(r) for r in requirements]:
+            req_name, constraint = _requirement_parts(requirement)
+            if not req_name:
+                divergences.append(f"requirement {requirement!r} has no parseable name")
+                continue
+            entry = _extra_entry(extra, req_name)
+            if entry is None:
+                divergences.append(
+                    f"'{req_name}' is required by extra {extra!r} but has no "
+                    "extra-scoped requires-dist record (run 'uv lock')")
+                continue
+            locked_spec = str(entry.get("specifier", "") or "").replace(" ", "")
+            if constraint != locked_spec:
+                divergences.append(
+                    f"'{req_name}' constraint is {constraint!r} in the manifest for "
+                    f"extra {extra!r} but {locked_spec!r} in the lock (run 'uv lock')")
 
     return divergences
 
