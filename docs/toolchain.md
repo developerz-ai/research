@@ -45,6 +45,58 @@ nobody can upgrade.
 
 `uv.lock` **is** committed. Reproducibility is the whole point.
 
+### Dependency updates
+
+A project's `pyproject.toml` declares a `[tool.uv]` table, so the project is uv-managed.
+For a uv-managed project the committed `uv.lock` is the **discovery anchor**: the updater
+finds dependencies through the lockfile, and the `.github/dependabot.yml` entry for that
+project's directory names the `uv` ecosystem.
+
+| Project | Manifest | Lockfile (discovery anchor) | Dependabot entry |
+|---|---|---|---|
+| `projects/001-geometric-reasoning` | `pyproject.toml` (`[tool.uv]`, explicit `cu126` index) | `projects/001-geometric-reasoning/uv.lock` | ecosystem `uv`, `/projects/001-geometric-reasoning` |
+| `projects/002-ftl-axiom-search` | `pyproject.toml` (`[tool.uv]`, explicit `cu126` index) | `projects/002-ftl-axiom-search/uv.lock` | ecosystem `uv`, `/projects/002-ftl-axiom-search` |
+
+Both projects are uv-managed in exactly the same way — each pins `torch` to an explicit
+`https://download.pytorch.org/whl/cu126` index via `[[tool.uv.index]]` + `[tool.uv.sources]`
+— and both are discovered through their committed lockfile.
+
+**A correct Dependabot configuration is not evidence that a security update was delivered.**
+Configuration correctness means only that the manifest is discoverable by the ecosystem named
+in the config. Whether GitHub actually opened and merged an update is an observation that
+lives on GitHub, not in this repository: `.github/` contains only `dependabot.yml` — there is
+no CI workflow, no Dependabot run log, and no in-tree state that records delivery. So
+delivery is **unverified** from this checkout. What would settle it: the Dependabot run
+history for this repository on GitHub (and the merged update PRs), which are outside the
+repo.
+
+Before this change, `projects/002-ftl-axiom-search` had **no committed `uv.lock`** — only
+`pyproject.toml` — and its `.github/dependabot.yml` entry named the `pip` ecosystem.
+Changing the ecosystem string alone would not have helped: with no lockfile in the
+directory there is nothing for the updater to discover, and a `uv` entry pointing at a
+directory with no `uv.lock` discovers nothing either. The ecosystem string and the
+committed lockfile are two halves of one condition — **both** must be true for the project
+to be discoverable:
+
+1. the Dependabot entry names package-ecosystem `uv`, **and**
+2. the project's directory contains a committed `uv.lock`.
+
+`uv run tools/rx.py check` enforces both, so a project cannot silently fall out of the
+updater's reach. It also enforces the two ways that guarantee can rot:
+
+- **No `.github/dependabot.yml` — or one with no `updates:` entries — is itself a problem**
+  once a uv-managed project exists in the tree. A deleted config must not read as
+  "everything fine"; that is the silent pass the check exists to prevent. With no
+  uv-managed projects there is nothing for an updater to discover, and the absence is
+  genuinely fine.
+- **The committed `uv.lock` must still describe its `pyproject.toml`.** A lock that merely
+  carries the project's root package can predate the manifest: `numpy` stays pinned at
+  `>=1.26` after the manifest moves to `numpy>=2`. `rx check` compares `requires-python`,
+  every dependency's recorded constraint (`[package.metadata].requires-dist`), the
+  resolved uv index sources (`[tool.uv.sources]` through `[[tool.uv.index]]`), and the
+  extras — and names what moved. The remedy for every divergence is the same: run
+  `uv lock` and commit the regenerated file.
+
 ## PyTorch and CUDA
 
 You do not need the CUDA Toolkit installed. PyTorch wheels ship their own CUDA runtime;

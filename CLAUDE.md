@@ -103,7 +103,7 @@ thread and decide what is true; the hive does the work.
 **1. Find out where it's at — before proposing anything.**
 ```bash
 uv run tools/rx.py status NNN     # readiness, experiment states, orphan results, claims
-uv run tools/rx.py check          # dangling links, untagged notes, incomplete run records
+uv run tools/rx.py check          # dangling links, untagged notes, incomplete run records, dependency-update config (uv-managed project + committed uv.lock + "uv" ecosystem)
 uv run tools/rx.py leads          # the discovery queue, ranked
 ```
 Then read that project's `CLAUDE.md` — its **Start here** section is the work queue, and its
