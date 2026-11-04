@@ -164,7 +164,9 @@ before E002 is preregistered (not results — the run was a wiring check, so it 
 ```bash
 uv sync --extra dev
 uv run geom doctor      # verify backend first
-uv run geom smoke       # <60s end-to-end
+uv run geom smoke       # <60s end-to-end. Exit 0 only on a full pass including the model check;
+                        #   'smoke PARTIAL' (exit 1) = model path skipped (network/unavailable model);
+                        #   'smoke FAILED' (exit 1) = load/scoring failure, cause printed
 uv run geom items --n 2 # read the items before trusting any number
 ```
 

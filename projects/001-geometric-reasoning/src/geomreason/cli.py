@@ -783,9 +783,42 @@ def grid(
     console.print(f"  [green]wrote[/green] {path}\n")
 
 
+# Module-prefix strings whose exception classes mean "the model could not be reached",
+# not "the harness is broken". Matched against ``__module__`` instead of imported names:
+# the hub's transport churns between releases (requests → httpx → httpx2), requests is
+# not installed here, and importing hub names at module scope would couple this module
+# to a dependency the rest of the CLI never needs.
+_AVAILABILITY_MODULE_PREFIXES = frozenset(
+    {"huggingface_hub", "httpx", "httpx2", "requests", "urllib3"}
+)
+
+
+def _is_availability_error(exc: BaseException) -> bool:
+    """True when *exc* says the model download/network failed, not that our code did.
+
+    Builtin ConnectionError/TimeoutError, plus any exception whose class MRO carries a
+    module under a hub/transport prefix (huggingface_hub, httpx, httpx2, requests,
+    urllib3). No imports of those names — matching on ``__module__`` survives a
+    transport swap without touching this file.
+    """
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    return any(
+        (getattr(cls, "__module__", "") or "").split(".", 1)[0]
+        in _AVAILABILITY_MODULE_PREFIXES
+        for cls in type(exc).__mro__
+    )
+
+
 @app.command()
 def smoke() -> None:
-    """Fast end-to-end check: generate, score with a tiny model, aggregate. CPU-friendly."""
+    """Fast end-to-end check: generate, score with a tiny model, aggregate. CPU-friendly.
+
+    Exits 0 only when the model check ran and passed. A network/transport failure on
+    the model path prints ``smoke PARTIAL`` (wiring proven, model unverified) and exits
+    1; any other model failure prints ``smoke FAILED`` and exits 1. Steps 1–2 still
+    assert loudly.
+    """
     console.print("\n  [bold]1/3[/bold] item generation + validation")
     pairs = item_gen.generate(n_per_family=5, seed=0)
     console.print(f"      {len(pairs)} pairs across {len(item_gen.FAMILIES)} families "
@@ -816,9 +849,22 @@ def smoke() -> None:
         )
         console.print(f"      scored {len(records)} items on {loaded.device_info.backend}, "
                       f"flip_rate={result.flip_rate:.2f} [green]ok[/green]")
+    except (NameError, AttributeError, ImportError, TypeError):
+        # Our own bug, not a bad network day — the same tuple sweep() re-raises above.
+        # Swallowing these makes a broken harness read as "model unavailable", which is
+        # exactly how a wiring error once hid as a skip.
+        raise
     except Exception as exc:
-        console.print(f"      [yellow]skipped[/yellow] ({type(exc).__name__}: {exc})")
-        console.print("      [dim]needs network for the model download; the rest passed[/dim]")
+        if _is_availability_error(exc):
+            console.print(f"      [yellow]skipped[/yellow] ({type(exc).__name__}: {exc})")
+            console.print("      [dim]network down — or retry with a warm HF cache: "
+                          "gpt2 already cached loads offline; wiring above is proven[/dim]")
+            console.print(f"  [yellow]smoke PARTIAL — wiring 2/3 ok · model check "
+                          f"skipped: {type(exc).__name__}: {exc}[/yellow]")
+            raise SystemExit(1) from exc
+        console.print(f"  [red]smoke FAILED — model check failed: "
+                      f"{type(exc).__name__}: {exc}[/red]")
+        raise SystemExit(1) from exc
 
     console.print("\n  [green]smoke passed[/green]\n")
 

@@ -33,7 +33,10 @@ No project-specific agents yet. Repo-wide ones apply: `lit-scout`, `idea-extract
 ```bash
 uv sync --extra dev                       # install
 uv run geom doctor                        # backend check — FIRST, in every fresh venv
-uv run geom smoke                         # <60s end-to-end, CPU-friendly
+uv run geom smoke                         # <60s end-to-end, CPU-friendly; exit 0 only when the model
+                                          #   check ran and scored; 'smoke PARTIAL' (exit 1) = model/network
+                                          #   unavailable (wiring steps still reported); 'smoke FAILED'
+                                          #   (exit 1) = load/scoring failure, cause printed
 uv run geom items --n 2                   # eyeball the items before trusting a number
 uv run geom eval --model gpt2 --n 100     # flip rate for one model
 uv run geom sweep --models gpt2,gpt2-medium,gpt2-large,gpt2-xl
@@ -51,7 +54,10 @@ RESEARCH_DEVICE=cpu uv run geom eval --model gpt2 --n 5            # force at ru
 ```
 
 ## Inner loop
-1. `uv run geom smoke` after every change — catches wiring breaks in under a minute.
+1. `uv run geom smoke` after every change — catches wiring breaks in under a minute. Exit 0 only
+   when the model check ran and scored; an unavailable model or network ends `smoke PARTIAL`
+   (exit 1 — the wiring steps are still reported); a load/scoring failure ends `smoke FAILED`
+   (exit 1) with the cause printed.
 2. `uv run geom eval --model gpt2 --n 10` — one small real run.
 3. Full sweep across ≥3 seeds only once step 2 looks sane.
 
