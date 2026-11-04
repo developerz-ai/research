@@ -27,7 +27,7 @@ Repo-wide agents apply too: `lit-scout`, `idea-extractor`, `synthesist`, `prereg
 
 ## Commands
 ```bash
-uv sync                                   # install
+uv sync --extra dev                       # install — dev extra (pytest, ruff) is opt-in; plain uv sync skips it
 uv run {{SLUG}} doctor                    # backend check — run first in a fresh venv
 uv run {{SLUG}} smoke                     # <60s end-to-end on CPU; run after every change
 uv run {{SLUG}} --help                    # full CLI

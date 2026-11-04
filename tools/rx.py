@@ -233,6 +233,143 @@ def cmd_projects(args: argparse.Namespace) -> int:
     return 0
 
 
+_DEPENDABOT_UV_ENTRY = """\
+  - package-ecosystem: "uv"
+    directory: "/projects/{directory}"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "01:00"
+    cooldown:
+      default-days: 14
+    groups:
+      uv-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+"""
+
+
+def _append_dependabot_entry(project_dir: str) -> str:
+    """Append one 'uv' updates entry for /projects/<project_dir> to .github/dependabot.yml.
+
+    Byte-append only: existing entries are never rewritten, and a manifest that already
+    names this directory is left untouched. The entry is the exact shape
+    .github/dependabot.yml and _check_dependency_updates expect — a uv-managed project
+    without one is invisible to the weekly updater.
+    """
+    manifest = ROOT / ".github" / "dependabot.yml"
+    directory = f"/projects/{project_dir}"
+    if manifest.exists():
+        entries = _dependabot_entries(
+            manifest.read_text(encoding="utf-8", errors="replace"))
+        if any(str(e.get("directory")) == directory for e in entries):
+            return f"dependabot: entry for {directory} already present — nothing appended"
+    body = manifest.read_bytes() if manifest.exists() else b"version: 2\nupdates:\n"
+    if not body.endswith(b"\n"):
+        body += b"\n"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_bytes(
+        body + _DEPENDABOT_UV_ENTRY.format(directory=project_dir).encode("utf-8"))
+    return f"dependabot: appended 'uv' entry for {directory}"
+
+
+def _try_uv_lock(dest: Path) -> str:
+    """Attempt 'uv lock' in the freshly scaffolded project. Best-effort, never fatal.
+
+    Offline or uv-less environments skip it — deliberately not silently: the missing
+    uv.lock stays visible to 'rx check' until someone generates and commits it. That
+    visibility is the point; a silent pass here is the failure mode.
+    """
+    if shutil.which("uv") is None:
+        return "lock:    uv not on PATH — uv.lock NOT generated"
+    try:
+        proc = subprocess.run(
+            ["uv", "lock"], cwd=dest, capture_output=True, text=True, timeout=300
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"lock:    uv lock failed ({exc}) — uv.lock NOT generated"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        reason = detail[-1] if detail else f"exit {proc.returncode}"
+        return f"lock:    uv lock failed ({reason}) — uv.lock NOT generated"
+    return "lock:    uv.lock generated"
+
+
+def _validate_scaffold(dest: Path, *, slug: str, pkg: str) -> list[str]:
+    """Self-check the rendered project against what its own CLAUDE.md advertises.
+
+    Every startup command the generated docs promise — uv sync, uv run <slug>
+    doctor/smoke/--help, pytest, ruff — must resolve to something that exists in the
+    rendered tree, and no rendered file may retain an unreplaced {{...}} placeholder.
+    This is the guard that keeps templates/project/ and cmd_new_project from drifting
+    apart silently: a template edit that breaks the scaffold dies here, at creation.
+    """
+    problems: list[str] = []
+
+    for f in sorted(dest.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(dest).as_posix()
+        for leftover in re.findall(r"\{\{[A-Za-z_][A-Za-z0-9_]*\}\}",
+                                   f.read_text(encoding="utf-8", errors="replace")):
+            problems.append(f"{rel}: unreplaced placeholder {leftover}")
+
+    for sub in ("experiments", "notes", "results", "data", "explore", "tests"):
+        if not (dest / sub).is_dir():
+            problems.append(f"{sub}/ missing — the generated CLAUDE.md layout names it")
+
+    try:
+        manifest = tomllib.loads((dest / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return problems + [f"pyproject.toml does not parse ({exc})"]
+
+    project = manifest.get("project", {})
+    if project.get("name") != pkg:
+        problems.append(
+            f"pyproject.toml: project.name is {project.get('name')!r}, expected {pkg!r}")
+    if project.get("scripts", {}).get(slug) != f"{pkg}.cli:app":
+        problems.append(
+            f"pyproject.toml: [project.scripts] must wire {slug!r} = '{pkg}.cli:app' — "
+            "`rx status` discovers the CLI through exactly that line")
+    tool = manifest.get("tool", {})
+    indexes = [i for i in tool.get("uv", {}).get("index", []) if isinstance(i, dict)]
+    if not any(i.get("name") == "pytorch" for i in indexes):
+        problems.append(
+            "pyproject.toml: no [[tool.uv.index]] 'pytorch' pin — the default PyPI torch "
+            "wheel is CPU-only and fails silently")
+    dev = {_requirement_parts(str(r))[0] for r in
+           project.get("optional-dependencies", {}).get("dev", [])}
+    for needed, command in (("pytest", "uv run pytest -q"), ("ruff", "uv run ruff check")):
+        if needed not in dev:
+            problems.append(
+                f"pyproject.toml: dev extra missing {needed!r} — CLAUDE.md advertises "
+                f"`{command}`")
+    if "ruff" not in tool:
+        problems.append("pyproject.toml: no [tool.ruff] — CLAUDE.md advertises `uv run ruff`")
+
+    modules = {
+        "__init__.py": ("__version__",),
+        "device.py": ("DeviceInfo", "get_device_info", "pick_device", "autocast_dtype",
+                      "seed_everything"),
+        "cli.py": ("app", "doctor", "smoke"),
+        "provenance.py": ("RunRecord", "git_sha", "hardware"),
+    }
+    for module, symbols in modules.items():
+        path = dest / "src" / pkg / module
+        if not path.exists():
+            problems.append(f"src/{pkg}/{module} missing — CLAUDE.md names it")
+            continue
+        body = path.read_text(encoding="utf-8", errors="replace")
+        for sym in symbols:
+            if not re.search(rf"^(?:def |class )?{re.escape(sym)}\b", body, re.M):
+                problems.append(
+                    f"src/{pkg}/{module}: {sym} is not defined — a documented command or "
+                    "contract resolves to it")
+    if not (dest / "tests" / "test_scaffold.py").exists():
+        problems.append("tests/test_scaffold.py missing — `uv run pytest -q` has no tests")
+    return problems
+
+
 def cmd_new_project(args: argparse.Namespace) -> int:
     """Scaffold projects/NNN-slug from the project template."""
     slug = slugify(args.name)
@@ -243,17 +380,41 @@ def cmd_new_project(args: argparse.Namespace) -> int:
     if dest.exists():
         die(f"{dest.name} already exists")
 
-    for sub in ("experiments", "notes", "results", "data", f"src/{slug.replace('-', '_')}", "tests"):
+    pkg = slug.replace("-", "_")
+    for sub in ("experiments", "notes", "results", "data", "explore", f"src/{pkg}", "tests"):
         (dest / sub).mkdir(parents=True, exist_ok=True)
 
-    fields = dict(slug=slug, number=number, name=args.name, date=today(),
-                  pkg=slug.replace("-", "_"))
+    fields = dict(slug=slug, number=number, name=args.name, date=today(), pkg=pkg)
     render(TEMPLATES / "project" / "CLAUDE.md", dest / "CLAUDE.md", **fields)
     render(TEMPLATES / "project" / "README.md", dest / "README.md", **fields)
-    (dest / "data" / ".gitkeep").touch()
-    (dest / "results" / ".gitkeep").touch()
+    render(TEMPLATES / "project" / "pyproject.toml", dest / "pyproject.toml", **fields)
+    for module in ("__init__.py", "device.py", "cli.py", "provenance.py"):
+        render(TEMPLATES / "project" / module, dest / "src" / pkg / module, **fields)
+    render(TEMPLATES / "project" / "test_scaffold.py",
+           dest / "tests" / "test_scaffold.py", **fields)
+    for keep in ("data", "results", "explore"):
+        (dest / keep / ".gitkeep").touch()
+
+    problems = _validate_scaffold(dest, slug=slug, pkg=pkg)
+    if problems:
+        print()
+        for p in problems:
+            print(red(f"  invalid scaffold: {p}"))
+        # A half-built project on disk is worse than none: a retry dies on
+        # "already exists" (numbers are never reused), and rx check would flag
+        # the zombie's missing uv.lock and dependabot entry forever.
+        shutil.rmtree(dest, ignore_errors=True)
+        print(yellow(f"  removed projects/{dest.name} — nothing was created"))
+        die("scaffold self-validation failed — fix templates/project/ or cmd_new_project")
+
     print()
-    print(f"  next: {bold(f'cd projects/{number}-{slug}')}")
+    print(f"  {_append_dependabot_entry(dest.name)}")
+    print(f"  {_try_uv_lock(dest)}")
+    if not (dest / "uv.lock").exists():
+        print(yellow(f"  remedy: cd projects/{number}-{slug} && uv lock, then commit uv.lock —"))
+        print(yellow("  'uv run tools/rx.py check' keeps flagging the missing lock until then"))
+    print()
+    print(f"  next: {bold(f'cd projects/{number}-{slug} && uv sync && uv run {slug} doctor')}")
     print(dim("  then write notes/ and a preregistered experiments/E001-*.md before any code"))
     return 0
 
