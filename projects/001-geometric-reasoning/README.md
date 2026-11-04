@@ -137,7 +137,8 @@ ladder, including Qwen2.5-7B and Qwen3.5-9B — see
   listed this confound as low-risk; that judgement was wrong and the family's numbers should
   be reported separately until it is settled.
 - **E002** — reconsider **stickiness** as the outcome variable. It is well defined even at
-  chance accuracy and fell with scale where flip rate did not.
+  chance accuracy and fell overall with scale (0.913 → 0.793, non-monotonically) across
+  124M → 1.5B, as flip rate rose overall (0.048 → 0.171, also non-monotonically).
 
 Two things a functional check of `geom geometry` on gpt2 already surfaced, worth fixing
 before E002 is preregistered (not results — the run was a wiring check, so it was not kept):

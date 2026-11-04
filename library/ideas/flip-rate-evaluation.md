@@ -123,4 +123,5 @@ it. See `results/superseded/README.md`.
 3. Does the flip-rate gap correlate with any geometric metric of the hidden states? `[open]`
    — blocked: flip rate has too little variance across the GPT-2 ladder to correlate against.
 4. Is **stickiness** the better outcome variable? It is defined even at chance accuracy and
-   moved with scale where flip rate did not. `[open]`
+   fell overall with scale (0.913 → 0.793, non-monotonically) while flip rate rose overall
+   (0.048 → 0.171, also non-monotonically). `[open]`
