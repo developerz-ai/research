@@ -21,8 +21,9 @@ Consequences for these files:
   the signature of a single positional rule applied everywhere.
 
 Fixed by perturbing the **verb** (`gave … to` → `received … from`) so both names hold their
-positions. Guarded permanently by `tests/test_baselines.py`, and by
-`uv run geom baselines`, which now runs the same admissibility check on demand.
+positions. Guarded permanently by `tests/test_baselines.py`, and enforced on every run:
+`geom eval` and `geom sweep` run the same admissibility check and cannot emit a record for
+an inadmissible family; `uv run geom baselines` remains the on-demand full table.
 
 Do not cite these numbers. Cite the re-run.
 

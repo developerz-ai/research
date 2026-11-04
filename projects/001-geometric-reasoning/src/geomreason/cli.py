@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -72,6 +72,28 @@ def _flip_records_by_model() -> dict[str, tuple[Path, dict]]:
         if model and model not in found:
             found[model] = (path, record)
     return found
+
+
+def _refuse_inadmissible(flat: list[item_gen.Item]) -> None:
+    """Refuse to score an item population a trivial heuristic can ace.
+
+    The baselines contract — measure, on the same item set, every run — is enforced here
+    rather than left to whoever remembers to run ``geom baselines`` first. Called by
+    ``geom eval`` and ``geom sweep`` before any model work. Raises ``typer.Exit``, which
+    subclasses ``Exception``: a caller with a broad ``except Exception`` (sweep) must
+    re-raise it, or the refusal dies as a "failed model" and the sweep still exits 0.
+    """
+    violations = baseline_lib.admissibility_violations(flat)
+    if not violations:
+        return
+    console.print("  [red]inadmissible item population[/red] — not measuring reasoning:")
+    for family, (name, rate) in sorted(violations.items()):
+        console.print(
+            f"    {family}: {name} flips {rate:.3f} > "
+            f"ceiling {baseline_lib.ADMISSIBLE_CEILING:.2f}"
+        )
+    console.print("  run [bold]geom baselines[/bold] for the full heuristic table")
+    raise typer.Exit(1)
 
 
 def _print_result(model: str, result: metric_lib.FlipRateResult) -> None:
@@ -175,7 +197,7 @@ def baselines(
             console.print(f"    {family:<14} [green]no heuristic applies[/green]")
             continue
         name, rate = entry
-        if rate > 0.40:
+        if rate > baseline_lib.ADMISSIBLE_CEILING:
             bad = True
             console.print(f"    {family:<14} [red]{rate:.3f}[/red] via {name} "
                           f"[red]← NOT a reasoning test[/red]")
@@ -226,6 +248,9 @@ def eval(
 
     pairs = item_gen.generate(n_per_family=n, seed=seed)
     flat = item_gen.flatten(pairs)
+    # Admissibility is a precondition, not a caveat: refuse before any model work, so an
+    # inadmissible population loads no model, scores nothing, and writes no run record.
+    _refuse_inadmissible(flat)
     prompts = [item.prompt for item in flat]
     console.print(f"  {len(pairs)} pairs / {len(flat)} items, seed {seed}")
 
@@ -282,14 +307,21 @@ def sweep(
     experiment: str = typer.Option("E001"),
 ) -> None:
     """Flip rate across a model-size ladder — the cheap test that needs no training."""
+    # The population is model-independent (item_gen.generate), so the admissibility guard
+    # runs once, here, OUTSIDE the per-model try below: typer.Exit subclasses Exception,
+    # and the broad except would swallow the refusal as "failed model" + exit 0.
+    _refuse_inadmissible(item_gen.flatten(item_gen.generate(n_per_family=n, seed=seed)))
+
     for model in [m.strip() for m in models.split(",") if m.strip()]:
         console.rule(f"[bold]{model}")
         try:
             eval(model=model, n=n, seed=seed, batch_size=batch_size,
                  aggregation="sum", out=None, experiment=experiment)
-        except (NameError, AttributeError, ImportError, TypeError):
-            # Our own bug, not a bad model. Swallowing these makes a broken harness look
-            # like four unavailable checkpoints — which is exactly what happened once.
+        except (NameError, AttributeError, ImportError, TypeError, typer.Exit):
+            # Our own bug, not a bad model. And typer.Exit is the admissibility guard
+            # refusing the population — a refusal propagates, it is never a per-model
+            # failure. Swallowing these makes a broken harness look like four unavailable
+            # checkpoints — which is exactly what happened once.
             raise
         except Exception as exc:  # one unavailable model must not lose the whole sweep
             console.print(f"  [red]failed[/red] {model}: {type(exc).__name__}: {exc}\n")
@@ -664,7 +696,7 @@ def reconcile_grid(report: dict, prior: dict | None) -> dict:
 
     prior_timestamp_utc = None if prior is None else prior.get("timestamp_utc")
     prior_date = str(prior_timestamp_utc)[:10] if prior_timestamp_utc else "unknown"
-    completed_date = datetime.now(timezone.utc).date().isoformat()
+    completed_date = datetime.now(UTC).date().isoformat()
 
     cells: list[dict] = []
     n_reproduced = n_drifted = n_completed = 0

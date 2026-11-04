@@ -321,14 +321,17 @@ def test_eval_record_carries_input_population_with_prompt_digest(tmp_path, monke
 
     monkeypatch.setattr(evaluate, "evaluate_items", fake_evaluate)
 
-    result = runner.invoke(cli.app, ["eval", "--model", "m", "--n", "2", "--seed", "3"])
+    # n=100/seed=0 is the anchored admissible population (proven admissible by
+    # tests/test_baselines.py); a tiny n=2 draw could trip the enforced admissibility
+    # ceiling by draw noise alone.
+    result = runner.invoke(cli.app, ["eval", "--model", "m", "--n", "100", "--seed", "0"])
     assert result.exit_code == 0
 
-    path = results / "E001-m-seed3.json"
+    path = results / "E001-m-seed0.json"
     assert path.exists()
     record = json.loads(path.read_text(encoding="utf-8"))
     stored = [item["prompt"] for item in record["items"]]
-    assert len(stored) == 24
+    assert len(stored) == 1200
 
     block = record["config"]["input_population"]
     assert block["prompt_digest"] == inputs.population_digest(stored)

@@ -13,11 +13,12 @@ import pytest
 
 from geomreason import baselines
 from geomreason import items as item_gen
+from geomreason.baselines import ADMISSIBLE_CEILING  # the preregistered line, single source
 
 CHANCE = 0.25
 # A heuristic at chance is unavoidable; well above it means the family is solvable without
-# reasoning. 0.40 is the preregistered line.
-ADMISSIBLE_CEILING = 0.40
+# reasoning. The ceiling is defined once in baselines.py and enforced by `geom eval` and
+# `geom sweep`.
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])

@@ -37,6 +37,7 @@ uv run geom smoke                         # <60s end-to-end, CPU-friendly
 uv run geom items --n 2                   # eyeball the items before trusting a number
 uv run geom eval --model gpt2 --n 100     # flip rate for one model
 uv run geom sweep --models gpt2,gpt2-medium,gpt2-large,gpt2-xl
+uv run geom baselines                     # heuristic-baseline table on demand
 uv run geom geometry --model gpt2         # per-layer hidden-state descriptors
 uv run geom report --pattern "E001-*.json"
 uv run pytest -q
@@ -88,6 +89,10 @@ revealed here as answering from surface form alone. That contrast is the point o
 - **Options must be identical strings across a pair.** This is the control that removes
   option-string, length, and frequency effects. `Pair.validate()` enforces it; any new
   family must pass it for thousands of seeds (`tests/test_items.py`).
+- **Admissibility is enforced on every run, not remembered.** `geom eval` and `geom sweep`
+  score the heuristic baselines on the population they generate and exit nonzero without
+  writing a record when any family's best heuristic clears 0.40; `uv run geom baselines`
+  prints the full table on demand.
 - **A perturbation that leaves the answer under-determined scores a reasoning model as
   wrong.** Affirming the consequent and denying the antecedent are the easy mistakes here —
   both are deliberately excluded from `_conditional`.

@@ -99,8 +99,10 @@ empty, so the expensive matched-training experiment is not justified on this evi
    while managing 0.04–0.19 paired. A conventional benchmark would call those models
    competent. **That contrast is the most transferable result here.**
 4. **Two of our own errors, both caught by the harness:**
-   - An item family solvable by "answer the last-named entity" at flip rate 1.0. Now guarded
-     by `uv run geom baselines` on every run.
+   - An item family solvable by "answer the last-named entity" at flip rate 1.0. `geom eval`
+     and `geom sweep` run the admissibility check on every run and refuse to produce a
+     result (nonzero exit, no record) when any family is solvable by a heuristic;
+     `uv run geom baselines` prints the full table on demand.
    - A model that loaded with **randomly-initialised weights** and returned 0.013 — which
      would have read as "a 100M model cannot reason". `load_model` now refuses any checkpoint
      with missing keys.
