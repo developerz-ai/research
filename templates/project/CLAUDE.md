@@ -26,6 +26,13 @@ Repo-wide agents apply too: `lit-scout`, `idea-extractor`, `synthesist`, `prereg
 `falsifier`, `run-auditor`. Roster and dispatch patterns: `../../docs/hive.md`.
 
 ## Commands
+
+For ROCm (Linux) or CPU-only wheels, first change the `pytorch` index URL in
+`pyproject.toml` to `https://download.pytorch.org/whl/rocm6.2` or
+`https://download.pytorch.org/whl/cpu`, respectively. Run the sync below, then commit
+`pyproject.toml` and `uv.lock` together. Do not use a one-shot `uv sync --index`
+override: later `uv run` commands automatically sync against the manifest again.
+
 ```bash
 uv sync --extra dev                       # install — dev extra (pytest, ruff) is opt-in; plain uv sync skips it
 uv run {{SLUG}} doctor                    # backend check — run first in a fresh venv

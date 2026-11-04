@@ -23,7 +23,9 @@ import re
 import shutil
 import sys
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -782,3 +784,55 @@ def test_uv_lock_nonzero_exit_warns_with_reason(
     assert "uv lock failed (hint: pytorch index unreachable)" in out
     assert "uv.lock NOT generated" in out
     assert "commit uv.lock" in out
+
+
+@pytest.mark.parametrize("command", ["doctor", "smoke"])
+@pytest.mark.parametrize("decorator", ["", '@app.command("renamed")\n', '@other.command()\n'])
+def test_missing_command_registration_fails_validation(
+    broken_template_tree: Path, capsys: pytest.CaptureFixture[str],
+    command: str, decorator: str,
+) -> None:
+    cli = broken_template_tree / "project" / "cli.py"
+    _write(cli, cli.read_text(encoding="utf-8").replace(
+        f"@app.command()\ndef {command}", f"{decorator}def {command}"))
+    with pytest.raises(SystemExit) as exc:
+        rx.main(["new-project", "widget physics"])
+    assert exc.value.code == 1
+    assert f"{command} is not registered on app" in capsys.readouterr().out
+    assert not (rx.PROJECTS / "001-widget-physics").exists()
+
+
+def test_scaffold_run_record_concurrent_writers(
+    scaffold_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dest = _scaffold(scaffold_tree)
+    spec = importlib.util.spec_from_file_location(
+        "scaffold_provenance", dest / "src" / "widget_physics" / "provenance.py")
+    assert spec and spec.loader
+    provenance = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, provenance)
+    spec.loader.exec_module(provenance)
+    barrier = Barrier(2)
+    monkeypatch.setattr(provenance, "git_sha", lambda: "test-sha")
+
+    def hardware():
+        barrier.wait(timeout=10)
+        return {"accelerator": "test"}
+
+    monkeypatch.setattr(provenance, "hardware", hardware)
+    path = dest / "results" / "E000-race.json"
+
+    def write(seed):
+        try:
+            provenance.RunRecord("E000", seed, {"seed": seed}, items=[{"seed": seed}]).write(path)
+        except FileExistsError:
+            return None
+        return seed
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, [1, 2]))
+    winners = [seed for seed in results if seed is not None]
+    assert len(winners) == 1
+    record = provenance.load(path)
+    assert record["seed"] == winners[0]
+    assert record["items"] == [{"seed": winners[0]}]

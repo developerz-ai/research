@@ -26,9 +26,12 @@ packages = ["src/{{PKG}}"]
 # Default: CUDA 12.6 on Windows and Linux. PyPI's default torch wheel on Windows is
 # CPU-only and fails silently by being 50x slower, so the index is pinned explicitly.
 #
-# Override for other backends (no file edit needed):
-#   AMD/ROCm (Linux):  uv sync --index pytorch=https://download.pytorch.org/whl/rocm6.2
-#   CPU only:          uv sync --index pytorch=https://download.pytorch.org/whl/cpu
+# For other backends, change the pytorch index url below BEFORE syncing:
+#   AMD/ROCm (Linux):  https://download.pytorch.org/whl/rocm6.2
+#   CPU only:          https://download.pytorch.org/whl/cpu
+# Then run uv sync (add --extra dev for tests) and commit pyproject.toml + uv.lock.
+# A one-shot uv sync --index override is NOT persistent: later uv run commands
+# automatically sync against this manifest and can replace the selected wheel.
 #
 # Always verify what you actually got:  uv run {{SLUG}} doctor
 [[tool.uv.index]]

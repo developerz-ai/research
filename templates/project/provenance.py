@@ -61,11 +61,6 @@ class RunRecord:
     def write(self, path: Path) -> Path:
         """Write the record. Refuses to overwrite — results are append-only."""
         path = Path(path)
-        if path.exists():
-            raise FileExistsError(
-                f"{path} exists. Results are append-only; pick a new filename rather than "
-                "silently replacing a measurement."
-            )
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": SCHEMA_VERSION,
@@ -79,7 +74,9 @@ class RunRecord:
             "notes": self.notes,
             "items": self.items,
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8", newline="\n")
+        serialized = json.dumps(payload, indent=2)
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(serialized)
         return path
 
 

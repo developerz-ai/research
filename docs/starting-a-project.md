@@ -27,6 +27,12 @@ is invisible to the updater.
 
 First commands in the new project:
 
+For ROCm (Linux) or CPU-only wheels, first edit the `pytorch` index URL in the new
+project's `pyproject.toml`: use `https://download.pytorch.org/whl/rocm6.2` or
+`https://download.pytorch.org/whl/cpu`, respectively. The sync below updates `uv.lock`;
+commit both files together. A one-shot `uv sync --index` override is not persistent:
+subsequent `uv run` commands sync against the manifest and can replace that wheel.
+
 ```bash
 cd projects/NNN-geometric-reasoning
 uv sync                # add --extra dev for pytest and ruff

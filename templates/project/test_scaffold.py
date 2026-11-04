@@ -6,7 +6,9 @@ first experiment module lands, its contract tests land beside it in this directo
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -46,3 +48,32 @@ def test_run_record_round_trip(tmp_path: Path):
     assert loaded["git_sha"]
     with pytest.raises(FileExistsError):
         record.write(path)
+
+
+def test_run_record_concurrent_writers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Both writers reach serialization; only one may create the measurement."""
+    barrier = Barrier(2)
+    monkeypatch.setattr(provenance, "git_sha", lambda: "test-sha")
+
+    def hardware():
+        barrier.wait(timeout=10)
+        return {"accelerator": "test"}
+
+    monkeypatch.setattr(provenance, "hardware", hardware)
+    path = tmp_path / "E000-race.json"
+
+    def write(seed):
+        record = provenance.RunRecord("E000", seed, {"seed": seed}, items=[{"seed": seed}])
+        try:
+            record.write(path)
+        except FileExistsError:
+            return None
+        return seed
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, [1, 2]))
+    winners = [seed for seed in results if seed is not None]
+    assert len(winners) == 1
+    loaded = provenance.load(path)
+    assert loaded["seed"] == winners[0]
+    assert loaded["items"] == [{"seed": winners[0]}]

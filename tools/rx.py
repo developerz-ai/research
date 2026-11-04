@@ -17,6 +17,7 @@ registered and documented automatically.
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import json
 import os
@@ -365,6 +366,36 @@ def _validate_scaffold(dest: Path, *, slug: str, pkg: str) -> list[str]:
                 problems.append(
                     f"src/{pkg}/{module}: {sym} is not defined — a documented command or "
                     "contract resolves to it")
+        if module == "cli.py":
+            try:
+                tree = ast.parse(body)
+            except SyntaxError as exc:
+                problems.append(f"src/{pkg}/{module}: invalid Python ({exc})")
+                continue
+            registered = set()
+            for node in tree.body:
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                for decorator in node.decorator_list:
+                    if not (
+                        isinstance(decorator, ast.Call)
+                        and isinstance(decorator.func, ast.Attribute)
+                        and isinstance(decorator.func.value, ast.Name)
+                        and decorator.func.value.id == "app"
+                        and decorator.func.attr == "command"
+                    ):
+                        continue
+                    name = next((k.value for k in decorator.keywords if k.arg == "name"),
+                                decorator.args[0] if decorator.args else None)
+                    if name is None or (isinstance(name, ast.Constant) and name.value is None):
+                        registered.add(node.name.replace("_", "-"))
+                    elif isinstance(name, ast.Constant) and isinstance(name.value, str):
+                        registered.add(name.value)
+            for command in ("doctor", "smoke"):
+                if command not in registered:
+                    problems.append(
+                        f"src/{pkg}/{module}: {command} is not registered on app — "
+                        f"CLAUDE.md advertises `uv run {slug} {command}`")
     if not (dest / "tests" / "test_scaffold.py").exists():
         problems.append("tests/test_scaffold.py missing — `uv run pytest -q` has no tests")
     return problems
