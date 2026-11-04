@@ -532,29 +532,169 @@ def _dependabot_entries(text: str) -> list[dict[str, object]]:
     return entries
 
 
-def _lock_resolves_manifest(pyproject: Path, lock: Path) -> bool:
-    """True when uv.lock carries a root package matching pyproject.toml's name.
+def _canonical_name(name: str) -> str:
+    """PEP 503 normalisation: uv lowercases names and dashes run together in uv.lock."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
-    A uv lock has one editable/virtual root package for the project. Its presence is
-    the machine-checkable anchor: without it the updater has no project to resolve.
+
+def _requirement_parts(requirement: str) -> tuple[str, str]:
+    """Split a manifest requirement into (canonical name, constraint).
+
+    "torch[cpu] >=2.5,<3 ; python_version >= '3.12'" -> ("torch", ">=2.5,<3").
+    The marker after ';' is dropped: uv.lock records markers on its own terms and
+    they carry no staleness signal.
+    """
+    head = requirement.split(";", 1)[0].strip()
+    match = re.match(r"[A-Za-z0-9._-]+", head)
+    if match is None:
+        return "", head.replace(" ", "")
+    name = _canonical_name(match.group(0))
+    rest = head[match.end():].strip()
+    if rest.startswith("[") and "]" in rest:
+        rest = rest.split("]", 1)[1].strip()
+    return name, rest.replace(" ", "")
+
+
+def _lock_divergences(pyproject: Path, lock: Path) -> list[str]:
+    """Every way uv.lock fails to describe pyproject.toml's project; empty == resolves.
+
+    Carrying the project's root package is not enough: a lock written before the
+    manifest changed keeps that name while pinning the old requirements — numpy
+    stays at >=1.26 after the manifest moves to numpy>=2. So the recorded root
+    requirements ([package.metadata].requires-dist), the uv index sources resolved
+    through [[tool.uv.index]], requires-python, and the extras are each compared
+    against the manifest itself. Every divergence is one string naming what moved.
     """
     try:
         manifest = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         locked = tomllib.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return False
-    name = manifest.get("project", {}).get("name")
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return [f"unparseable, so it cannot be checked against its manifest ({exc})"]
+
+    project = manifest.get("project", {})
+    name = project.get("name")
     if not name:
-        return False
-    return any(pkg.get("name") == name for pkg in locked.get("package", []))
+        return ["pyproject.toml declares no project.name — nothing to anchor the lock to"]
+
+    canonical = _canonical_name(str(name))
+    root = next(
+        (pkg for pkg in locked.get("package", [])
+         if _canonical_name(str(pkg.get("name", ""))) == canonical),
+        None,
+    )
+    if root is None:
+        return [f"root package '{name}' is absent — the lock does not describe this project"]
+
+    divergences: list[str] = []
+
+    manifest_python = str(project.get("requires-python", "")).strip()
+    lock_python = str(locked.get("requires-python", "")).strip()
+    if manifest_python != lock_python:
+        divergences.append(
+            f"requires-python is {lock_python!r} but the manifest says "
+            f"{manifest_python!r} (run 'uv lock')")
+
+    locked_reqs: dict[str, list[dict[str, object]]] = {}
+    for entry in root.get("metadata", {}).get("requires-dist", []):
+        if isinstance(entry, dict):
+            key = _canonical_name(str(entry.get("name", "")))
+            locked_reqs.setdefault(key, []).append(entry)
+
+    def _main_entry(req_name: str) -> dict[str, object] | None:
+        """The requires-dist record for a plain dependency; extra-scoped ones don't count."""
+        return next(
+            (e for e in locked_reqs.get(req_name, [])
+             if "extra ==" not in str(e.get("marker", ""))),
+            None,
+        )
+
+    for requirement in [str(r) for r in project.get("dependencies", [])]:
+        req_name, constraint = _requirement_parts(requirement)
+        if not req_name:
+            divergences.append(f"requirement {requirement!r} has no parseable name")
+            continue
+        entry = _main_entry(req_name)
+        if entry is None:
+            divergences.append(
+                f"'{req_name}' is required by the manifest but absent from requires-dist "
+                "(run 'uv lock')")
+            continue
+        locked_spec = str(entry.get("specifier", "") or "").replace(" ", "")
+        if constraint != locked_spec:
+            divergences.append(
+                f"'{req_name}' constraint is {constraint!r} in the manifest but "
+                f"{locked_spec!r} in the lock (run 'uv lock')")
+
+    # uv index sources: the manifest pins some requirements to a named index; the lock
+    # records the resolved index URL on the requirement it was resolved from. Non-index
+    # source kinds (path/git/url) live on the package table instead and are not compared.
+    tool_uv = manifest.get("tool", {}).get("uv", {})
+    indexes = {
+        str(idx.get("name")): str(idx.get("url", ""))
+        for idx in tool_uv.get("index", [])
+        if isinstance(idx, dict) and idx.get("name")
+    }
+    sources = tool_uv.get("sources", {})
+    if not isinstance(sources, dict):
+        sources = {}
+    for source_pkg, source_def in sources.items():
+        pkg = _canonical_name(str(source_pkg))
+        defs = source_def if isinstance(source_def, list) else [source_def]
+        index_name = next(
+            (str(d.get("index")) for d in defs
+             if isinstance(d, dict) and d.get("index") is not None),
+            None,
+        )
+        entry = _main_entry(pkg)
+        if index_name is None:
+            if entry is not None and entry.get("index"):
+                divergences.append(
+                    f"'{pkg}' is pinned to index '{entry['index']}' in the lock but the "
+                    "manifest declares no index source for it (run 'uv lock')")
+            continue
+        resolved = indexes.get(index_name, "")
+        if not resolved:
+            divergences.append(
+                f"source for '{pkg}' names index {index_name!r} with no matching "
+                "[[tool.uv.index]] entry")
+        elif entry is None:
+            divergences.append(
+                f"'{pkg}' has an index source but is absent from requires-dist (run 'uv lock')")
+        else:
+            locked_index = str(entry.get("index", "") or "")
+            if locked_index != resolved:
+                divergences.append(
+                    f"'{pkg}' index source resolves to {resolved!r} in the manifest but "
+                    f"{locked_index!r} in the lock (run 'uv lock')")
+
+    # Optional dependencies: the lock records names only, so compare the name sets.
+    locked_extras = root.get("optional-dependencies", {})
+    for extra, requirements in project.get("optional-dependencies", {}).items():
+        want = sorted(_requirement_parts(str(r))[0] for r in requirements)
+        have = sorted(
+            _canonical_name(str(e.get("name", "")))
+            for e in locked_extras.get(extra, [])
+            if isinstance(e, dict)
+        )
+        if want != have:
+            divergences.append(
+                f"extra {extra!r} is {want} in the manifest but {have} in the lock "
+                "(run 'uv lock')")
+
+    return divergences
 
 
 def _check_dependency_updates(problems: list[str]) -> None:
-    """A uv-managed project is discoverable only via ecosystem "uv" + a committed uv.lock."""
-    manifest = ROOT / ".github" / "dependabot.yml"
-    if not manifest.exists():
-        return
-    entries = _dependabot_entries(manifest.read_text(encoding="utf-8", errors="replace"))
+    """A uv-managed project is discoverable only via ecosystem "uv" + a committed uv.lock.
+
+    The Dependabot manifest is required, not optional: with uv-managed projects in the
+    tree and no .github/dependabot.yml, nothing would be checked at all — the silent
+    pass this function exists to prevent.
+    """
+    manifest_path = ROOT / ".github" / "dependabot.yml"
+    entries: list[dict[str, object]] = []
+    if manifest_path.exists():
+        entries = _dependabot_entries(manifest_path.read_text(encoding="utf-8", errors="replace"))
     # Every entry per directory is kept. Two entries naming one directory are a config
     # bug, not an override pair: collapsing them would silently validate one entry
     # against the other's ecosystem and leave the other one unchecked.
@@ -572,14 +712,27 @@ def _check_dependency_updates(problems: list[str]) -> None:
                 f".github/dependabot.yml: {len(dupes)} updates entries name the same "
                 f"directory {directory!r}: {listed}; only one can apply")
 
+    uv_projects: list[Path] = []
     for pyproject in sorted(PROJECTS.glob("*/pyproject.toml")):
         try:
             data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         except (OSError, tomllib.TOMLDecodeError) as exc:
             problems.append(f"{pyproject.relative_to(ROOT).as_posix()}: invalid TOML ({exc})")
             continue
-        if "uv" not in data.get("tool", {}):
-            continue
+        if "uv" in data.get("tool", {}):
+            uv_projects.append(pyproject)
+
+    if not entries:
+        if uv_projects:
+            state = "missing" if not manifest_path.exists() else "has no updates entries"
+            names = ", ".join(
+                p.parent.relative_to(ROOT).as_posix() for p in uv_projects)
+            problems.append(
+                f".github/dependabot.yml: {state} - {len(uv_projects)} uv-managed "
+                f"project(s) ({names}) have no updater configuration")
+        return
+
+    for pyproject in uv_projects:
         project_dir = pyproject.parent
         rel = project_dir.relative_to(ROOT).as_posix()
         dir_entries = by_dir.get(f"/{rel}")
@@ -597,10 +750,8 @@ def _check_dependency_updates(problems: list[str]) -> None:
             problems.append(
                 f"{rel}/uv.lock: missing - the uv ecosystem has nothing to discover")
             continue
-        if not _lock_resolves_manifest(pyproject, lock):
-            problems.append(
-                f"{rel}/uv.lock: does not resolve its own pyproject.toml "
-                "(root package missing or lock is stale)")
+        for divergence in _lock_divergences(pyproject, lock):
+            problems.append(f"{rel}/uv.lock: {divergence}")
 
 
 def cmd_check(args: argparse.Namespace) -> int:

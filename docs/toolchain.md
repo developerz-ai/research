@@ -82,7 +82,20 @@ to be discoverable:
 2. the project's directory contains a committed `uv.lock`.
 
 `uv run tools/rx.py check` enforces both, so a project cannot silently fall out of the
-updater's reach.
+updater's reach. It also enforces the two ways that guarantee can rot:
+
+- **No `.github/dependabot.yml` — or one with no `updates:` entries — is itself a problem**
+  once a uv-managed project exists in the tree. A deleted config must not read as
+  "everything fine"; that is the silent pass the check exists to prevent. With no
+  uv-managed projects there is nothing for an updater to discover, and the absence is
+  genuinely fine.
+- **The committed `uv.lock` must still describe its `pyproject.toml`.** A lock that merely
+  carries the project's root package can predate the manifest: `numpy` stays pinned at
+  `>=1.26` after the manifest moves to `numpy>=2`. `rx check` compares `requires-python`,
+  every dependency's recorded constraint (`[package.metadata].requires-dist`), the
+  resolved uv index sources (`[tool.uv.sources]` through `[[tool.uv.index]]`), and the
+  extras — and names what moved. The remedy for every divergence is the same: run
+  `uv lock` and commit the regenerated file.
 
 ## PyTorch and CUDA
 

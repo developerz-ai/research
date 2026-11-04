@@ -1,10 +1,10 @@
 """Tests for the dependency-update validation in ``tools/rx.py``.
 
-The check that a uv-managed project stays discoverable by the updater is the only
-machine guard on the Dependabot configuration, and until now no test pinned it:
-deleting ``_check_dependency_updates`` and ``_lock_resolves_manifest`` outright
-would leave the suite green. These tests drive the validation against a synthetic
-tree so each failure mode is asserted separately.
+The check that a uv-managed project stays discoverable — and stays *correctly*
+described — by the updater is the only machine guard on the Dependabot
+configuration, and until now no test pinned it: deleting ``_check_dependency_updates``
+and ``_lock_divergences`` outright would leave the suite green. These tests drive the
+validation against a synthetic tree so each failure mode is asserted separately.
 
 Run from the repo root:
 
@@ -52,10 +52,21 @@ PYPROJECT = """\
 name = "{name}"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26"]
+dependencies = ["numpy>=1.26", "torch>=2.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [tool.uv]
 dev-dependencies = []
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://example.test/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [{{ index = "pytorch" }}]
 """
 
 UV_LOCK = """\
@@ -67,6 +78,22 @@ requires-python = ">=3.11"
 name = "{name}"
 version = "0.1.0"
 source = {{ editable = "." }}
+dependencies = [
+    {{ name = "numpy" }},
+    {{ name = "torch" }},
+]
+
+[package.optional-dependencies]
+dev = [
+    {{ name = "pytest" }},
+]
+
+[package.metadata]
+requires-dist = [
+    {{ name = "numpy", specifier = ">=1.26" }},
+    {{ name = "torch", specifier = ">=2.5", index = "https://example.test/whl/cu126" }},
+    {{ name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" }},
+]
 """
 
 
@@ -102,8 +129,8 @@ def tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point rx.ROOT and rx.PROJECTS at a synthetic tree for one test.
 
     The tree starts in the passing shape: a uv-managed project, a 'uv' Dependabot
-    entry for its directory, and a committed uv.lock. Each test then breaks
-    exactly one thing.
+    entry for its directory, and a committed uv.lock whose recorded requirements
+    match the manifest. Each test then breaks exactly one thing.
     """
     monkeypatch.setattr(rx, "ROOT", tmp_path)
     monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
@@ -134,10 +161,36 @@ def test_project_without_tool_uv_is_not_uv_managed(tree: Path) -> None:
     assert _problems() == []
 
 
-def test_missing_dependabot_manifest_is_not_a_problem(tree: Path) -> None:
-    """No .github/dependabot.yml means nothing to check, not a failure."""
+def test_missing_dependabot_manifest_is_reported_when_uv_projects_exist(tree: Path) -> None:
+    """Deleting the config must not silently disable the whole check.
+
+    With a uv-managed project in the tree, a missing .github/dependabot.yml means
+    the updater discovers nothing — that is a problem, not a pass.
+    """
     (tree / ".github" / "dependabot.yml").unlink()
+    problems = _problems()
+    assert len(problems) == 1
+    assert "missing" in problems[0]
+    assert "001-test-project" in problems[0]
+
+
+def test_missing_dependabot_manifest_with_no_uv_projects_is_still_clean(tree: Path) -> None:
+    """The config is only required once there is something for an updater to discover."""
+    (tree / ".github" / "dependabot.yml").unlink()
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        '[project]\nname = "testpkg"\nversion = "0.1.0"\n',
+    )
     assert _problems() == []
+
+
+def test_dependabot_manifest_without_updates_entries_is_reported(tree: Path) -> None:
+    """A present-but-empty manifest is the same silent pass as a deleted one."""
+    _write(tree / ".github" / "dependabot.yml", "version: 2\nupdates: []\n")
+    problems = _problems()
+    assert len(problems) == 1
+    assert "no updates entries" in problems[0]
+    assert "001-test-project" in problems[0]
 
 
 # ── each failure mode, separately ─────────────────────────────────────────────
@@ -178,14 +231,14 @@ def test_missing_updates_entry_is_reported(tree: Path) -> None:
 
 
 def test_lock_that_does_not_resolve_its_manifest_is_reported(tree: Path) -> None:
-    """A lock without the project's own root package is stale, not a discovery anchor."""
+    """A lock without the project's own root package describes some other project."""
     _write(
         tree / "projects" / "001-test-project" / "uv.lock",
         'version = 1\n\n[[package]]\nname = "somebody-else"\nversion = "0.1.0"\n',
     )
     problems = _problems()
     assert len(problems) == 1
-    assert "does not resolve" in problems[0]
+    assert "does not describe this project" in problems[0]
 
 
 def test_invalid_pyproject_toml_is_reported(tree: Path) -> None:
@@ -194,6 +247,99 @@ def test_invalid_pyproject_toml_is_reported(tree: Path) -> None:
     problems = _problems()
     assert len(problems) == 1
     assert "invalid TOML" in problems[0]
+
+
+# ── a stale lock: the manifest moved, the lock did not ────────────────────────
+
+
+def test_stale_lock_kept_after_constraint_bump_is_reported(tree: Path) -> None:
+    """The named bug: numpy>=1.26 becomes numpy>=2 and the lock is not regenerated.
+
+    The root package name still matches, so a name-only check passes; the
+    constraint recorded in requires-dist is what catches it.
+    """
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'dependencies = ["numpy>=1.26", "torch>=2.5"]',
+            'dependencies = ["numpy>=2", "torch>=2.5"]',
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'numpy'" in problems[0]
+    assert "'>=2'" in problems[0]
+    assert "'>=1.26'" in problems[0]
+
+
+def test_stale_lock_missing_requirement_is_reported(tree: Path) -> None:
+    """A requirement added to the manifest after the lock was written has no record."""
+    _write(
+        tree / "projects" / "001-test-project" / "uv.lock",
+        UV_LOCK.format(name="testpkg").replace(
+            '    { name = "numpy", specifier = ">=1.26" },\n', "",
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'numpy'" in problems[0]
+    assert "requires-dist" in problems[0]
+
+
+def test_stale_lock_requires_python_drift_is_reported(tree: Path) -> None:
+    """A lock resolved for a different Python floor is stale too."""
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'requires-python = ">=3.11"', 'requires-python = ">=3.12"'
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "requires-python" in problems[0]
+
+
+def test_stale_lock_index_source_drift_is_reported(tree: Path) -> None:
+    """uv sources are part of the contract: the lock must record the same index."""
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'url = "https://example.test/whl/cu126"',
+            'url = "https://example.test/whl/rocm"',
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'torch'" in problems[0]
+    assert "index" in problems[0]
+
+
+def test_source_naming_undefined_index_is_reported(tree: Path) -> None:
+    """A source pointing at an index the manifest never defines cannot be resolved."""
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'torch = [{ index = "pytorch" }]',
+            'torch = [{ index = "nowhere" }]',
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'nowhere'" in problems[0]
+
+
+def test_stale_lock_extra_mismatch_is_reported(tree: Path) -> None:
+    """An extra added to the manifest after the lock was written is caught by name."""
+    _write(
+        tree / "projects" / "001-test-project" / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'dev = ["pytest>=8.0"]',
+            'dev = ["pytest>=8.0", "ruff>=0.6"]',
+        ),
+    )
+    problems = _problems()
+    assert len(problems) == 1
+    assert "'dev'" in problems[0]
 
 
 # ── duplicate directory entries ───────────────────────────────────────────────
@@ -246,31 +392,47 @@ def test_distinct_directories_are_not_duplicates(tree: Path) -> None:
     assert _problems() == []
 
 
-# ── _lock_resolves_manifest, directly ─────────────────────────────────────────
+# ── _lock_divergences, directly ───────────────────────────────────────────────
 
 
-def test_lock_resolves_manifest_true_for_matching_root_package(tmp_path: Path) -> None:
+def test_lock_divergences_empty_for_matching_lock(tmp_path: Path) -> None:
     pyproject = _write(tmp_path / "pyproject.toml", PYPROJECT.format(name="testpkg"))
     lock = _write(tmp_path / "uv.lock", UV_LOCK.format(name="testpkg"))
-    assert rx._lock_resolves_manifest(pyproject, lock) is True
+    assert rx._lock_divergences(pyproject, lock) == []
 
 
-def test_lock_resolves_manifest_false_for_foreign_root_package(tmp_path: Path) -> None:
+def test_lock_divergences_names_the_root_package(tmp_path: Path) -> None:
     pyproject = _write(tmp_path / "pyproject.toml", PYPROJECT.format(name="testpkg"))
     lock = _write(
         tmp_path / "uv.lock",
         'version = 1\n\n[[package]]\nname = "other"\nversion = "0.1.0"\n',
     )
-    assert rx._lock_resolves_manifest(pyproject, lock) is False
+    divergences = rx._lock_divergences(pyproject, lock)
+    assert len(divergences) == 1
+    assert "testpkg" in divergences[0]
 
 
-def test_lock_resolves_manifest_false_for_unparseable_files(tmp_path: Path) -> None:
+def test_lock_divergences_for_unparseable_lock(tmp_path: Path) -> None:
     pyproject = _write(tmp_path / "pyproject.toml", PYPROJECT.format(name="testpkg"))
     lock = _write(tmp_path / "uv.lock", "not = [toml")
-    assert rx._lock_resolves_manifest(pyproject, lock) is False
+    assert rx._lock_divergences(pyproject, lock) != []
 
 
-def test_lock_resolves_manifest_false_when_manifest_has_no_name(tmp_path: Path) -> None:
+def test_lock_divergences_when_manifest_has_no_name(tmp_path: Path) -> None:
     pyproject = _write(tmp_path / "pyproject.toml", '[project]\nversion = "0.1.0"\n')
     lock = _write(tmp_path / "uv.lock", UV_LOCK.format(name="testpkg"))
-    assert rx._lock_resolves_manifest(pyproject, lock) is False
+    assert rx._lock_divergences(pyproject, lock) != []
+
+
+def test_lock_divergences_compare_specifiers_not_just_names(tmp_path: Path) -> None:
+    """The regression this exists for: same root package, old constraint."""
+    pyproject = _write(
+        tmp_path / "pyproject.toml",
+        PYPROJECT.format(name="testpkg").replace(
+            'dependencies = ["numpy>=1.26", "torch>=2.5"]',
+            'dependencies = ["numpy>=2", "torch>=2.5"]',
+        ),
+    )
+    lock = _write(tmp_path / "uv.lock", UV_LOCK.format(name="testpkg"))
+    divergences = rx._lock_divergences(pyproject, lock)
+    assert any("'numpy'" in d and "'>=2'" in d and "'>=1.26'" in d for d in divergences)
