@@ -109,10 +109,12 @@ by being slow instead of erroring.
 The CUDA Toolkit (`nvcc`) is only required when compiling custom CUDA kernels. Install it
 then, not before.
 
-Verify a project's environment:
+Verify the project-local environment for `projects/001-geometric-reasoning`. From the
+repository root, change into that directory first; if already there, skip the `cd`:
 
 ```bash
-uv run python -m geomreason.doctor
+cd projects/001-geometric-reasoning
+uv run geom doctor
 ```
 
 That prints torch version, CUDA availability, device name, VRAM, and a matmul smoke test.
