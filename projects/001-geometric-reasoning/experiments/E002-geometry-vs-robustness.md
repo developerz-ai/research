@@ -150,6 +150,44 @@ text is left as written, and no file under `results/` was modified. (Reproductio
 `config.families` is stored sorted, so a recorded all-families population is regenerated
 with `generate(seed=..., n_per_family=...)` and no family filter.)
 
+### Depth-grid reconciliation (added 2026-11-04)
+
+The preregistration fixes **4 descriptors × 6 depth positions = 24 exploratory tests**
+(lines 46-48, 55): the four relative depths {0.25, 0.50, 0.75, 1.00} plus the **max and
+argmax over all layers** (the Valeriani "hump" peak and its position). The 2026-08-11 pass
+executed only the **16 relative-depth cells** — `results/E002-correlation.json` pins
+`n_exploratory_tests: 16` (line 293) — so the 8 max/argmax cells were never run, and
+nothing in the record named the gap. Found 2026-11-04 by counting the executed grid
+against the preregistration [ours].
+
+The 8 missing cells were completed 2026-11-04 by running `geom grid --experiment E002`
+[ours] **purely on the committed per-layer geometry records** (`results/E002-geom-*.json`)
+joined with the existing flip-rate records: no model was re-run, and no historical record
+was modified — `results/` is append-only and `results/E002-correlation.json` is
+byte-unchanged. The per-cell account, statuses, and the reproduction of the 16 prior
+values live in `results/E002-grid-completion.json` (`prior_record: E002-correlation.json`).
+
+- **Reproduction.** All 16 previously-executed cells recompute identically from the
+  committed records: `reconciliation.n_reproduced = 16`, `n_drifted = 0`; each carries
+  status "executed 2026-08-11 (reproduced)" [ours]. The confounded reading did not move.
+- **Completion.** The 8 max/argmax cells ran for the first time, status
+  "completed 2026-11-04" — max rows carry each model's peak layer index, argmax rows
+  each model's relative peak depth, so no aggregate sits without per-item data behind it.
+- **Exploratory, and they change nothing.** Partial ρ (n=16, exploratory only):
+  participation_ratio max −0.198 / argmax +0.660 · effective_rank max −0.310 /
+  argmax +0.200 · intrinsic_dim_twonn max +0.685 / argmax +0.406 · anisotropy max
+  +0.592 / argmax −0.645. Four of the eight exceed |0.5|, but the preregistered
+  decision rule reads the primary tests (depth 0.75) and the GPT-2 confound check only,
+  and the multiplicity warning (lines 55-57: "an uncorrected |ρ| ≥ 0.5 will occur by
+  chance across 24 tests with high probability") applies to these cells with full force.
+  They are computed on the same 16-model population whose every primary signal dissolved
+  once GPT-2 was removed, and no preregistered family-removal rule exists for exploratory
+  cells — they inherit the family confound and cannot clear it. The verdict below is
+  unchanged.
+- **Provenance, as recorded in the completion record:** timestamp
+  2026-11-04T14:46:50+00:00, `git_sha` `94538e8-dirty` (the producing code was written and
+  run in the same uncommitted tree), seed 0, hardware resolved to the CPU backend.
+
 ### Primary — relative depth 0.75 (preregistered), n=16, no exclusions
 
 | Descriptor | n | ρ(geom, flip) | ρ(geom, size) | **partial ρ** |
@@ -261,3 +299,4 @@ only size) showed a surviving correlation.
 | 2026-08-11 | verdict function now incorporates the confound check | It reported SUPPORTED on a correlation the check had already disproved on the line above |
 | 2026-11-04 | Executed population recorded: primary n=16 (every measured model, no exclusions), confound check n=12 (the same 16 minus the four GPT-2 models) | The preregistration's "n ≈ 15" was an estimate, and its family counts miscounted Qwen3/3.5 as 3 rather than 4; the run used all 16 measured models. The preregistration text is left as written — the executed population is recorded here and in Results. The ≤2B restriction proposed in E001b/E001c was never applied |
 | 2026-11-04 | Input-population audit added to Results: flip-rate runs scored 600 pairs / 1200 items (n_per_family=100 — E001 GPT-2 at seeds 0/1/2, E001b/E001c at seed 0), geometry runs profiled 144 pairs / 288 prompts per model (n_per_family=24, max_samples=288, seed 0), position-aligned overlap confined to the first family's 48 prompts | The preregistration's identical-inputs premise (lines 75-76, 91) did not hold as executed — the geometry pass drew its own population from the same generator. Recorded here and in Results; preregistration text left as written; no results file modified |
+| 2026-11-04 | Depth-grid reconciliation added to Results: the preregistered 24-cell grid (4 descriptors × 6 depth positions, lines 46-48, 55) had only its 16 relative-depth cells executed on 2026-08-11 (`results/E002-correlation.json` pins `n_exploratory_tests: 16`); the 8 max/argmax cells were completed post-result by `geom grid --experiment E002` from the committed per-layer geometry records — all 16 prior cells reproduce exactly (`n_drifted = 0`), per-cell statuses in `results/E002-grid-completion.json` | The max/argmax "hump" positions were never implemented in the 2026-08-11 pass and nothing in the record named the gap. Post-result completion, disclosed here and in Results; preregistration text left as written; `results/E002-correlation.json` not modified; the new cells are exploratory and do not enter the verdict |

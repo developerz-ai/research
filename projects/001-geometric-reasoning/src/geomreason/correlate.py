@@ -4,6 +4,12 @@ Implements the E002 preregistration. Everything here is decided in
 ``experiments/E002-geometry-vs-robustness.md`` before this file existed: which descriptors,
 which depths, which is primary, which threshold, and how multiplicity is handled.
 
+The preregistered grid is 4 descriptors x 6 depth positions = 24 cells: the four numeric
+relative depths plus the max/argmax "hump" positions over layers. The 2026-08-11 pass
+executed only the 16 numeric cells; ``run`` now covers the full grid and NAMES any cell it
+cannot execute rather than silently dropping it. Exploratory cells never influence the
+verdict below — the preregistered decision reads the primary tests only.
+
 **This design supports no causal claim**, whatever the numbers say. Models differ in data,
 tokenizer, depth and recipe simultaneously; parameter count is a weak control. A positive
 result justifies the matched-training experiment. A null is the stronger outcome.
@@ -22,6 +28,14 @@ DESCRIPTORS = ("participation_ratio", "effective_rank", "intrinsic_dim_twonn", "
 PRIMARY_DEPTH = 0.75  # preregistered as THE primary test; everything else is exploratory
 SUPPORT_THRESHOLD = 0.5
 FALSIFY_THRESHOLD = 0.3
+
+# The full preregistered grid (E002 lines 55-63): 4 descriptors x 6 depth positions.
+# "max" is the peak descriptor VALUE per model; "argmax" the RELATIVE DEPTH where the peak
+# sits (the Valeriani "hump" position). Labels are the agreed record vocabulary.
+GRID_POSITIONS = ("0.25", "0.5", "0.75", "1.0", "max", "argmax")
+PRIMARY_POSITION = "0.75"  # the primary test, as a grid label
+_POSITION_FRACTIONS = dict(zip(GRID_POSITIONS[:4], RELATIVE_DEPTHS))
+assert _POSITION_FRACTIONS[PRIMARY_POSITION] == PRIMARY_DEPTH
 
 
 def rank(values: list[float]) -> list[float]:
@@ -88,18 +102,35 @@ class ModelPoint:
         value = nearest.get(descriptor)
         return None if value is None or (isinstance(value, float) and math.isnan(value)) else value
 
-    def max_over_layers(self, descriptor: str) -> tuple[float, int] | None:
-        """Peak value and the layer it occurs at — the Valeriani 'hump' position."""
+    def peak_layer(self, descriptor: str) -> dict | None:
+        """The layer holding the descriptor's peak: index, value, and relative depth.
+
+        Same layer-0 exclusion as ``at_relative_depth``. The relative depth of the peak is
+        the Valeriani "hump" position — WHERE in the stack the descriptor peaks — and is
+        normalized by the model's FULL nonzero layer extent, not by the layers where this
+        descriptor happens to be usable: a descriptor that is NaN at the final layer must
+        not make a layer-6 peak sit at 6/11 instead of 6/12.
+        """
+        nonzero = [lay for lay in self.layers if lay["layer"] > 0]
         usable = [
-            lay for lay in self.layers
-            if lay["layer"] > 0 and lay.get(descriptor) is not None
+            lay for lay in nonzero
+            if lay.get(descriptor) is not None
             and not math.isnan(lay[descriptor])
         ]
-        if not usable:
+        if not usable:  # usable ⊆ nonzero, so nonzero is non-empty here too
             return None
+        extent = max(lay["layer"] for lay in nonzero)
         best = max(usable, key=lambda lay: lay[descriptor])
-        depth = best["layer"] / max(lay["layer"] for lay in usable)
-        return best[descriptor], depth
+        return {
+            "layer": best["layer"],
+            "value": best[descriptor],
+            "relative_depth": best["layer"] / extent,
+        }
+
+    def max_over_layers(self, descriptor: str) -> tuple[float, float] | None:
+        """Peak value and the relative depth it occurs at — the Valeriani 'hump'."""
+        peak = self.peak_layer(descriptor)
+        return None if peak is None else (peak["value"], peak["relative_depth"])
 
 
 def load_points(results_dir: Path, geometry_experiment: str = "E002") -> list[ModelPoint]:
@@ -133,16 +164,53 @@ def load_points(results_dir: Path, geometry_experiment: str = "E002") -> list[Mo
     return points
 
 
-def correlate(points: list[ModelPoint], descriptor: str, fraction: float) -> dict | None:
-    """Partial correlation of one descriptor at one depth against flip rate."""
-    rows = [
-        (p.at_relative_depth(descriptor, fraction), p.flip_rate, p.log_params)
-        for p in points
-    ]
-    rows = [r for r in rows if r[0] is not None]
+def cell_rows(
+    points: list[ModelPoint], descriptor: str, position: str
+) -> tuple[list[tuple], list[dict]]:
+    """Per-model measurements for one grid cell: (descriptor value, flip, log params).
+
+    Numeric positions sample the descriptor at a relative depth (nearest layer). "max"
+    takes each model's peak descriptor VALUE, carrying the peak layer index as per-item
+    provenance; "argmax" takes the RELATIVE DEPTH of that peak. Layer 0 is excluded in
+    every case: every prompt ends with the same token, so layer-0 last-token states are
+    duplicates and the manifold estimators are undefined there.
+    """
+    fraction = _POSITION_FRACTIONS.get(position)
+    if fraction is None and position not in ("max", "argmax"):
+        raise ValueError(f"unknown grid position: {position!r}")
+    rows: list[tuple] = []
+    per_model: list[dict] = []
+    for p in points:
+        if fraction is not None:
+            value = p.at_relative_depth(descriptor, fraction)
+        else:
+            peak = p.peak_layer(descriptor)
+            value = None
+            if peak is not None:
+                if position == "max":
+                    value = peak["value"]
+                    per_model.append({"model": p.model, "peak_layer": peak["layer"]})
+                else:  # argmax
+                    value = peak["relative_depth"]
+                    per_model.append({
+                        "model": p.model,
+                        "relative_peak_depth": peak["relative_depth"],
+                    })
+        if value is not None:
+            rows.append((value, p.flip_rate, p.log_params))
+    return rows, per_model
+
+
+def _stats_row(
+    descriptor: str,
+    position: str,
+    fraction: float | None,
+    rows: list[tuple],
+    per_model: list[dict],
+) -> dict | None:
+    """Partial-correlation row for one cell, or None when fewer than 4 models have data."""
     if len(rows) < 4:
         return None
-
     geom = [r[0] for r in rows]
     flip = [r[1] for r in rows]
     size = [r[2] for r in rows]
@@ -151,16 +219,27 @@ def correlate(points: list[ModelPoint], descriptor: str, fraction: float) -> dic
     rho_gs = spearman(geom, size)
     rho_fs = spearman(flip, size)
 
-    return {
-        "descriptor": descriptor,
-        "relative_depth": fraction,
+    row: dict = {"descriptor": descriptor, "position": position}
+    if fraction is not None:
+        row["relative_depth"] = fraction
+    row.update({
         "n": len(rows),
         "spearman_geom_flip": round(rho_gf, 4),
         "spearman_geom_size": round(rho_gs, 4),
         "spearman_flip_size": round(rho_fs, 4),
         "partial_spearman": round(partial(rho_gf, rho_gs, rho_fs), 4),
         "pearson_geom_flip": round(pearson(geom, flip), 4),
-    }
+    })
+    if per_model:
+        # No aggregate without per-item data behind it: peak rows carry each model's peak.
+        row["per_model"] = per_model
+    return row
+
+
+def cell_correlate(points: list[ModelPoint], descriptor: str, position: str) -> dict | None:
+    """Partial correlation for one preregistered grid cell; None when the cell has no data."""
+    rows, per_model = cell_rows(points, descriptor, position)
+    return _stats_row(descriptor, position, _POSITION_FRACTIONS.get(position), rows, per_model)
 
 
 def run(points: list[ModelPoint]) -> dict:
@@ -168,14 +247,28 @@ def run(points: list[ModelPoint]) -> dict:
     primary = [
         result
         for d in DESCRIPTORS
-        if (result := correlate(points, d, PRIMARY_DEPTH)) is not None
+        if (result := cell_correlate(points, d, PRIMARY_POSITION)) is not None
     ]
-    exploratory = [
-        result
-        for d in DESCRIPTORS
-        for f in RELATIVE_DEPTHS
-        if (result := correlate(points, d, f)) is not None
-    ]
+    exploratory: list[dict] = []
+    missing_cells: list[list[str]] = []
+    for d in DESCRIPTORS:
+        for position in GRID_POSITIONS:
+            result = cell_correlate(points, d, position)
+            if result is None:
+                missing_cells.append([d, position])
+            else:
+                exploratory.append(result)
+
+    # The preregistered multiplicity statement is 4 x 6 = 24 (E002 lines 55-63). The
+    # 2026-08-11 pass executed only the 16 numeric cells; the grid block makes any gap
+    # machine-checkable instead of discoverable by counting rows.
+    grid = {
+        "positions": list(GRID_POSITIONS),
+        "n_cells_preregistered": len(DESCRIPTORS) * len(GRID_POSITIONS),
+        "n_cells_executed": len(exploratory),
+        "missing_cells": missing_cells,
+        "complete": not missing_cells,
+    }
 
     # Preregistered confound check: is any correlation driven entirely by GPT-2 sitting in
     # one corner? If so it is a generation effect, not a geometry effect.
@@ -183,7 +276,7 @@ def run(points: list[ModelPoint]) -> dict:
     primary_no_gpt2 = [
         result
         for d in DESCRIPTORS
-        if (result := correlate(without_gpt2, d, PRIMARY_DEPTH)) is not None
+        if (result := cell_correlate(without_gpt2, d, PRIMARY_POSITION)) is not None
     ]
 
     strongest = max(
@@ -229,6 +322,7 @@ def run(points: list[ModelPoint]) -> dict:
         "primary": primary,
         "primary_excluding_gpt2": primary_no_gpt2,
         "exploratory": exploratory,
+        "grid": grid,
         "n_exploratory_tests": len(exploratory),
         "strongest_primary": strongest,
         "verdict": verdict,
