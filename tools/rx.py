@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -497,8 +498,113 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dependabot_entries(text: str) -> list[dict[str, object]]:
+    """Parse the small, fixed subset of Dependabot's YAML this repo uses.
+
+    stdlib only: PyYAML is not available in the bare-checkout toolchain. The parser
+    accepts exactly the shape in .github/dependabot.yml and ignores everything else.
+    """
+    entries: list[dict[str, object]] = []
+    entry: dict[str, object] | None = None
+    in_groups = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "updates:":
+            continue
+        if line.startswith("- "):
+            entry = {}
+            entries.append(entry)
+            in_groups = False
+            line = line[2:].strip()
+        if entry is None:
+            continue
+        if line.startswith("package-ecosystem:"):
+            entry["package-ecosystem"] = line.split(":", 1)[1].strip().strip('"\'')
+        elif line.startswith("directory:"):
+            entry["directory"] = line.split(":", 1)[1].strip().strip('"\'')
+        elif line == "groups:":
+            in_groups = True
+        elif in_groups and line.endswith(":"):
+            entry["group"] = line[:-1]
+            in_groups = False
+    return entries
+
+
+def _lock_resolves_manifest(pyproject: Path, lock: Path) -> bool:
+    """True when uv.lock carries a root package matching pyproject.toml's name.
+
+    A uv lock has one editable/virtual root package for the project. Its presence is
+    the machine-checkable anchor: without it the updater has no project to resolve.
+    """
+    try:
+        manifest = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        locked = tomllib.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    name = manifest.get("project", {}).get("name")
+    if not name:
+        return False
+    return any(pkg.get("name") == name for pkg in locked.get("package", []))
+
+
+def _check_dependency_updates(problems: list[str]) -> None:
+    """A uv-managed project is discoverable only via ecosystem "uv" + a committed uv.lock."""
+    manifest = ROOT / ".github" / "dependabot.yml"
+    if not manifest.exists():
+        return
+    entries = _dependabot_entries(manifest.read_text(encoding="utf-8", errors="replace"))
+    # Every entry per directory is kept. Two entries naming one directory are a config
+    # bug, not an override pair: collapsing them would silently validate one entry
+    # against the other's ecosystem and leave the other one unchecked.
+    by_dir: dict[str, list[dict[str, object]]] = {}
+    for entry in entries:
+        by_dir.setdefault(str(entry.get("directory", "")), []).append(entry)
+
+    for directory, dupes in by_dir.items():
+        if len(dupes) > 1:
+            listed = ", ".join(
+                f"#{i + 1} (package-ecosystem {e.get('package-ecosystem')!r})"
+                for i, e in enumerate(dupes)
+            )
+            problems.append(
+                f".github/dependabot.yml: {len(dupes)} updates entries name the same "
+                f"directory {directory!r}: {listed}; only one can apply")
+
+    for pyproject in sorted(PROJECTS.glob("*/pyproject.toml")):
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            problems.append(f"{pyproject.relative_to(ROOT).as_posix()}: invalid TOML ({exc})")
+            continue
+        if "uv" not in data.get("tool", {}):
+            continue
+        project_dir = pyproject.parent
+        rel = project_dir.relative_to(ROOT).as_posix()
+        dir_entries = by_dir.get(f"/{rel}")
+        if not dir_entries:
+            problems.append(
+                f".github/dependabot.yml: no updates entry for uv-managed project '{rel}'")
+            continue
+        for entry in dir_entries:
+            if entry.get("package-ecosystem") != "uv":
+                problems.append(
+                    f".github/dependabot.yml: uv-managed project '{rel}' names package-ecosystem "
+                    f"{entry.get('package-ecosystem')!r}; an updater can only discover it as 'uv'")
+        lock = project_dir / "uv.lock"
+        if not lock.exists():
+            problems.append(
+                f"{rel}/uv.lock: missing - the uv ecosystem has nothing to discover")
+            continue
+        if not _lock_resolves_manifest(pyproject, lock):
+            problems.append(
+                f"{rel}/uv.lock: does not resolve its own pyproject.toml "
+                "(root package missing or lock is stale)")
+
+
 def cmd_check(args: argparse.Namespace) -> int:
-    """Lint the knowledge base: dangling [[links]], untagged claims, orphan results."""
+    """Lint the knowledge base and the dependency-update configuration."""
     problems: list[str] = []
     notes = list(LIBRARY.rglob("*.md")) + list(PROJECTS.rglob("notes/*.md")) + \
         list(PROJECTS.rglob("experiments/*.md"))
@@ -570,6 +676,8 @@ def cmd_check(args: argparse.Namespace) -> int:
             if field not in rec:
                 problems.append(
                     f"{results.relative_to(ROOT).as_posix()}: run record missing '{field}'")
+
+    _check_dependency_updates(problems)
 
     if problems:
         print()

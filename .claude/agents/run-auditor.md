@@ -30,8 +30,10 @@ Run the repo's own linter first and report what it says:
 PYTHONIOENCODING=utf-8 uv run tools/rx.py check
 ```
 
-Then: dangling `[[links]]`, notes in `library/` with no evidence tag, and `results/*.json`
-with no experiment doc referencing them.
+Then: dangling `[[links]]`, notes in `library/` with no evidence tag, `results/*.json`
+with no experiment doc referencing them, and dependency-update drift (a uv-managed project
+whose committed `uv.lock` is missing, or whose Dependabot entry names an ecosystem that
+cannot discover it).
 
 ## Rules
 
