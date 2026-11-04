@@ -1,0 +1,1096 @@
+{
+  "schema_version": 1,
+  "experiment": "E002",
+  "timestamp_utc": "2026-11-04T14:46:50+00:00",
+  "git_sha": "94538e8-dirty",
+  "seed": 0,
+  "hardware": {
+    "platform": "Linux 6.8.0-147-generic",
+    "machine": "x86_64",
+    "python": "3.14.10",
+    "accelerator": {
+      "backend": "cpu",
+      "device": "cpu",
+      "name": "cpu",
+      "total_memory_gb": null,
+      "supports_bf16": false,
+      "torch_version": "2.14.1+cu126",
+      "build": "cpu"
+    }
+  },
+  "config": {
+    "models": [
+      "HuggingFaceTB/SmolLM2-1.7B",
+      "HuggingFaceTB/SmolLM2-135M",
+      "HuggingFaceTB/SmolLM2-360M",
+      "HuggingFaceTB/SmolLM3-3B-Base",
+      "Qwen/Qwen2.5-0.5B",
+      "Qwen/Qwen2.5-1.5B",
+      "Qwen/Qwen2.5-3B",
+      "Qwen/Qwen2.5-7B",
+      "Qwen/Qwen3-0.6B-Base",
+      "Qwen/Qwen3-1.7B-Base",
+      "Qwen/Qwen3.5-2B-Base",
+      "Qwen/Qwen3.5-9B-Base",
+      "gpt2-large",
+      "gpt2-medium",
+      "gpt2-xl",
+      "gpt2"
+    ],
+    "analysis": "grid completion (4 descriptors x 6 depth positions)",
+    "prior_record": "E002-correlation.json"
+  },
+  "metrics": {
+    "confound_check": "intrinsic_dim_twonn: +0.692 with GPT-2, +0.006 without",
+    "survives_confound_check": false,
+    "n_models": 16,
+    "primary_depth": 0.75,
+    "primary": [
+      {
+        "descriptor": "participation_ratio",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": 0.5882,
+        "spearman_geom_size": 0.6647,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.031,
+        "pearson_geom_flip": 0.5663
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": 0.5706,
+        "spearman_geom_size": 0.6412,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.0374,
+        "pearson_geom_flip": 0.4528
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": 0.85,
+        "spearman_geom_size": 0.6941,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.6922,
+        "pearson_geom_flip": 0.7849
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": -0.3176,
+        "spearman_geom_size": -0.5647,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.42,
+        "pearson_geom_flip": -0.296
+      }
+    ],
+    "primary_excluding_gpt2": [
+      {
+        "descriptor": "participation_ratio",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 12,
+        "spearman_geom_flip": 0.7483,
+        "spearman_geom_size": 0.8531,
+        "spearman_flip_size": 0.951,
+        "partial_spearman": -0.3916,
+        "pearson_geom_flip": 0.5935
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 12,
+        "spearman_geom_flip": 0.7063,
+        "spearman_geom_size": 0.7832,
+        "spearman_flip_size": 0.951,
+        "partial_spearman": -0.2008,
+        "pearson_geom_flip": 0.5264
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 12,
+        "spearman_geom_flip": 0.7063,
+        "spearman_geom_size": 0.7413,
+        "spearman_flip_size": 0.951,
+        "partial_spearman": 0.0064,
+        "pearson_geom_flip": 0.5653
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 12,
+        "spearman_geom_flip": -0.5245,
+        "spearman_geom_size": -0.5944,
+        "spearman_flip_size": 0.951,
+        "partial_spearman": 0.1643,
+        "pearson_geom_flip": -0.5206
+      }
+    ],
+    "exploratory": [
+      {
+        "descriptor": "participation_ratio",
+        "position": "0.25",
+        "relative_depth": 0.25,
+        "n": 16,
+        "spearman_geom_flip": -0.2353,
+        "spearman_geom_size": -0.0353,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.4119,
+        "pearson_geom_flip": -0.3836
+      },
+      {
+        "descriptor": "participation_ratio",
+        "position": "0.5",
+        "relative_depth": 0.5,
+        "n": 16,
+        "spearman_geom_flip": -0.2,
+        "spearman_geom_size": -0.0441,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.3256,
+        "pearson_geom_flip": -0.1166
+      },
+      {
+        "descriptor": "participation_ratio",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": 0.5882,
+        "spearman_geom_size": 0.6647,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.031,
+        "pearson_geom_flip": 0.5663
+      },
+      {
+        "descriptor": "participation_ratio",
+        "position": "1.0",
+        "relative_depth": 1.0,
+        "n": 16,
+        "spearman_geom_flip": 0.2647,
+        "spearman_geom_size": 0.4029,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.1866,
+        "pearson_geom_flip": 0.4384
+      },
+      {
+        "descriptor": "participation_ratio",
+        "position": "max",
+        "n": 16,
+        "spearman_geom_flip": 0.1824,
+        "spearman_geom_size": 0.3176,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.1978,
+        "pearson_geom_flip": 0.2673,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "peak_layer": 2
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "peak_layer": 29
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "peak_layer": 31
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "peak_layer": 34
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "peak_layer": 23
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "peak_layer": 28
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "peak_layer": 34
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "peak_layer": 27
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "peak_layer": 27
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "peak_layer": 27
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "peak_layer": 23
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "peak_layer": 32
+          },
+          {
+            "model": "gpt2-large",
+            "peak_layer": 1
+          },
+          {
+            "model": "gpt2-medium",
+            "peak_layer": 23
+          },
+          {
+            "model": "gpt2-xl",
+            "peak_layer": 1
+          },
+          {
+            "model": "gpt2",
+            "peak_layer": 11
+          }
+        ]
+      },
+      {
+        "descriptor": "participation_ratio",
+        "position": "argmax",
+        "n": 16,
+        "spearman_geom_flip": 0.3674,
+        "spearman_geom_size": 0.0459,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.6595,
+        "pearson_geom_flip": 0.3019,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "relative_peak_depth": 0.08333333333333333
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "relative_peak_depth": 0.9666666666666667
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "relative_peak_depth": 0.96875
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "relative_peak_depth": 0.9444444444444444
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "relative_peak_depth": 0.9583333333333334
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "relative_peak_depth": 0.9444444444444444
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "relative_peak_depth": 0.9642857142857143
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "relative_peak_depth": 0.9642857142857143
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "relative_peak_depth": 0.9642857142857143
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "relative_peak_depth": 0.9583333333333334
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "gpt2-large",
+            "relative_peak_depth": 0.027777777777777776
+          },
+          {
+            "model": "gpt2-medium",
+            "relative_peak_depth": 0.9583333333333334
+          },
+          {
+            "model": "gpt2-xl",
+            "relative_peak_depth": 0.020833333333333332
+          },
+          {
+            "model": "gpt2",
+            "relative_peak_depth": 0.9166666666666666
+          }
+        ]
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "0.25",
+        "relative_depth": 0.25,
+        "n": 16,
+        "spearman_geom_flip": -0.3676,
+        "spearman_geom_size": -0.0912,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.5828,
+        "pearson_geom_flip": -0.4597
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "0.5",
+        "relative_depth": 0.5,
+        "n": 16,
+        "spearman_geom_flip": -0.1941,
+        "spearman_geom_size": 0.0147,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.4161,
+        "pearson_geom_flip": -0.1108
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": 0.5706,
+        "spearman_geom_size": 0.6412,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.0374,
+        "pearson_geom_flip": 0.4528
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "1.0",
+        "relative_depth": 1.0,
+        "n": 16,
+        "spearman_geom_flip": 0.1618,
+        "spearman_geom_size": 0.3853,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.3761,
+        "pearson_geom_flip": 0.4758
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "max",
+        "n": 16,
+        "spearman_geom_flip": 0.25,
+        "spearman_geom_size": 0.4471,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.3101,
+        "pearson_geom_flip": 0.4426,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "peak_layer": 23
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "peak_layer": 29
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "peak_layer": 31
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "peak_layer": 34
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "peak_layer": 23
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "peak_layer": 28
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "peak_layer": 34
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "peak_layer": 27
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "peak_layer": 27
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "peak_layer": 27
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "peak_layer": 24
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "peak_layer": 32
+          },
+          {
+            "model": "gpt2-large",
+            "peak_layer": 1
+          },
+          {
+            "model": "gpt2-medium",
+            "peak_layer": 23
+          },
+          {
+            "model": "gpt2-xl",
+            "peak_layer": 48
+          },
+          {
+            "model": "gpt2",
+            "peak_layer": 11
+          }
+        ]
+      },
+      {
+        "descriptor": "effective_rank",
+        "position": "argmax",
+        "n": 16,
+        "spearman_geom_flip": 0.2685,
+        "spearman_geom_size": 0.1969,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.2003,
+        "pearson_geom_flip": 0.2819,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "relative_peak_depth": 0.9583333333333334
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "relative_peak_depth": 0.9666666666666667
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "relative_peak_depth": 0.96875
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "relative_peak_depth": 0.9444444444444444
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "relative_peak_depth": 0.9583333333333334
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "relative_peak_depth": 0.9444444444444444
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "relative_peak_depth": 0.9642857142857143
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "relative_peak_depth": 0.9642857142857143
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "relative_peak_depth": 0.9642857142857143
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "gpt2-large",
+            "relative_peak_depth": 0.027777777777777776
+          },
+          {
+            "model": "gpt2-medium",
+            "relative_peak_depth": 0.9583333333333334
+          },
+          {
+            "model": "gpt2-xl",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "gpt2",
+            "relative_peak_depth": 0.9166666666666666
+          }
+        ]
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "0.25",
+        "relative_depth": 0.25,
+        "n": 16,
+        "spearman_geom_flip": 0.8529,
+        "spearman_geom_size": 0.7294,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.6471,
+        "pearson_geom_flip": 0.8474
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "0.5",
+        "relative_depth": 0.5,
+        "n": 16,
+        "spearman_geom_flip": 0.5382,
+        "spearman_geom_size": 0.4971,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.2479,
+        "pearson_geom_flip": 0.6401
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": 0.85,
+        "spearman_geom_size": 0.6941,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.6922,
+        "pearson_geom_flip": 0.7849
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "1.0",
+        "relative_depth": 1.0,
+        "n": 16,
+        "spearman_geom_flip": 0.6882,
+        "spearman_geom_size": 0.6765,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.2766,
+        "pearson_geom_flip": 0.5759
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "max",
+        "n": 16,
+        "spearman_geom_flip": 0.8441,
+        "spearman_geom_size": 0.6882,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.6847,
+        "pearson_geom_flip": 0.8173,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "peak_layer": 17
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "peak_layer": 15
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "peak_layer": 23
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "peak_layer": 23
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "peak_layer": 18
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "peak_layer": 21
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "peak_layer": 28
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "peak_layer": 20
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "peak_layer": 15
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "peak_layer": 18
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "peak_layer": 12
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "peak_layer": 19
+          },
+          {
+            "model": "gpt2-large",
+            "peak_layer": 20
+          },
+          {
+            "model": "gpt2-medium",
+            "peak_layer": 13
+          },
+          {
+            "model": "gpt2-xl",
+            "peak_layer": 24
+          },
+          {
+            "model": "gpt2",
+            "peak_layer": 8
+          }
+        ]
+      },
+      {
+        "descriptor": "intrinsic_dim_twonn",
+        "position": "argmax",
+        "n": 16,
+        "spearman_geom_flip": 0.3292,
+        "spearman_geom_size": 0.1491,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.4064,
+        "pearson_geom_flip": 0.2884,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "relative_peak_depth": 0.7083333333333334
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "relative_peak_depth": 0.5
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "relative_peak_depth": 0.71875
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "relative_peak_depth": 0.6388888888888888
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "relative_peak_depth": 0.75
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "relative_peak_depth": 0.75
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "relative_peak_depth": 0.7777777777777778
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "relative_peak_depth": 0.7142857142857143
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "relative_peak_depth": 0.5357142857142857
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "relative_peak_depth": 0.6428571428571429
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "relative_peak_depth": 0.5
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "relative_peak_depth": 0.59375
+          },
+          {
+            "model": "gpt2-large",
+            "relative_peak_depth": 0.5555555555555556
+          },
+          {
+            "model": "gpt2-medium",
+            "relative_peak_depth": 0.5416666666666666
+          },
+          {
+            "model": "gpt2-xl",
+            "relative_peak_depth": 0.5
+          },
+          {
+            "model": "gpt2",
+            "relative_peak_depth": 0.6666666666666666
+          }
+        ]
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "0.25",
+        "relative_depth": 0.25,
+        "n": 16,
+        "spearman_geom_flip": -0.7559,
+        "spearman_geom_size": -0.8735,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.0084,
+        "pearson_geom_flip": -0.4892
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "0.5",
+        "relative_depth": 0.5,
+        "n": 16,
+        "spearman_geom_flip": -0.4059,
+        "spearman_geom_size": -0.6059,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.3029,
+        "pearson_geom_flip": -0.437
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "0.75",
+        "relative_depth": 0.75,
+        "n": 16,
+        "spearman_geom_flip": -0.3176,
+        "spearman_geom_size": -0.5647,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.42,
+        "pearson_geom_flip": -0.296
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "1.0",
+        "relative_depth": 1.0,
+        "n": 16,
+        "spearman_geom_flip": -0.2824,
+        "spearman_geom_size": -0.4529,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.2496,
+        "pearson_geom_flip": -0.1055
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "max",
+        "n": 16,
+        "spearman_geom_flip": -0.0427,
+        "spearman_geom_size": -0.365,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": 0.5919,
+        "pearson_geom_flip": 0.2401,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "peak_layer": 1
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "peak_layer": 1
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "peak_layer": 1
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "peak_layer": 1
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "peak_layer": 1
+          },
+          {
+            "model": "gpt2-large",
+            "peak_layer": 7
+          },
+          {
+            "model": "gpt2-medium",
+            "peak_layer": 24
+          },
+          {
+            "model": "gpt2-xl",
+            "peak_layer": 5
+          },
+          {
+            "model": "gpt2",
+            "peak_layer": 12
+          }
+        ]
+      },
+      {
+        "descriptor": "anisotropy",
+        "position": "argmax",
+        "n": 16,
+        "spearman_geom_flip": -0.6985,
+        "spearman_geom_size": -0.4811,
+        "spearman_flip_size": 0.8676,
+        "partial_spearman": -0.6449,
+        "pearson_geom_flip": -0.6084,
+        "per_model": [
+          {
+            "model": "HuggingFaceTB/SmolLM2-1.7B",
+            "relative_peak_depth": 0.041666666666666664
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-135M",
+            "relative_peak_depth": 0.03333333333333333
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM2-360M",
+            "relative_peak_depth": 0.03125
+          },
+          {
+            "model": "HuggingFaceTB/SmolLM3-3B-Base",
+            "relative_peak_depth": 0.027777777777777776
+          },
+          {
+            "model": "Qwen/Qwen2.5-0.5B",
+            "relative_peak_depth": 0.041666666666666664
+          },
+          {
+            "model": "Qwen/Qwen2.5-1.5B",
+            "relative_peak_depth": 0.03571428571428571
+          },
+          {
+            "model": "Qwen/Qwen2.5-3B",
+            "relative_peak_depth": 0.027777777777777776
+          },
+          {
+            "model": "Qwen/Qwen2.5-7B",
+            "relative_peak_depth": 0.03571428571428571
+          },
+          {
+            "model": "Qwen/Qwen3-0.6B-Base",
+            "relative_peak_depth": 0.03571428571428571
+          },
+          {
+            "model": "Qwen/Qwen3-1.7B-Base",
+            "relative_peak_depth": 0.03571428571428571
+          },
+          {
+            "model": "Qwen/Qwen3.5-2B-Base",
+            "relative_peak_depth": 0.041666666666666664
+          },
+          {
+            "model": "Qwen/Qwen3.5-9B-Base",
+            "relative_peak_depth": 0.03125
+          },
+          {
+            "model": "gpt2-large",
+            "relative_peak_depth": 0.19444444444444445
+          },
+          {
+            "model": "gpt2-medium",
+            "relative_peak_depth": 1.0
+          },
+          {
+            "model": "gpt2-xl",
+            "relative_peak_depth": 0.10416666666666667
+          },
+          {
+            "model": "gpt2",
+            "relative_peak_depth": 1.0
+          }
+        ]
+      }
+    ],
+    "grid": {
+      "positions": [
+        "0.25",
+        "0.5",
+        "0.75",
+        "1.0",
+        "max",
+        "argmax"
+      ],
+      "n_cells_preregistered": 24,
+      "n_cells_executed": 24,
+      "missing_cells": [],
+      "complete": true
+    },
+    "n_exploratory_tests": 24,
+    "strongest_primary": {
+      "descriptor": "intrinsic_dim_twonn",
+      "position": "0.75",
+      "relative_depth": 0.75,
+      "n": 16,
+      "spearman_geom_flip": 0.85,
+      "spearman_geom_size": 0.6941,
+      "spearman_flip_size": 0.8676,
+      "partial_spearman": 0.6922,
+      "pearson_geom_flip": 0.7849
+    },
+    "verdict": "CONFOUNDED \u2014 correlation does not survive removing the GPT-2 family",
+    "thresholds": {
+      "support": 0.5,
+      "falsify": 0.3
+    },
+    "caveat": "Correlational only. Parameter count is a weak control: models differ in data, tokenizer, depth and recipe simultaneously. No causal claim is available from this design.",
+    "reconciliation": {
+      "prior_timestamp_utc": "2026-08-11T17:07:08+00:00",
+      "compared_fields": [
+        "n",
+        "spearman_geom_flip",
+        "spearman_geom_size",
+        "partial_spearman",
+        "pearson_geom_flip"
+      ],
+      "cells": [
+        {
+          "descriptor": "participation_ratio",
+          "position": "0.25",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "participation_ratio",
+          "position": "0.5",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "participation_ratio",
+          "position": "0.75",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "participation_ratio",
+          "position": "1.0",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "participation_ratio",
+          "position": "max",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "participation_ratio",
+          "position": "argmax",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "effective_rank",
+          "position": "0.25",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "effective_rank",
+          "position": "0.5",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "effective_rank",
+          "position": "0.75",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "effective_rank",
+          "position": "1.0",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "effective_rank",
+          "position": "max",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "effective_rank",
+          "position": "argmax",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "intrinsic_dim_twonn",
+          "position": "0.25",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "intrinsic_dim_twonn",
+          "position": "0.5",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "intrinsic_dim_twonn",
+          "position": "0.75",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "intrinsic_dim_twonn",
+          "position": "1.0",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "intrinsic_dim_twonn",
+          "position": "max",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "intrinsic_dim_twonn",
+          "position": "argmax",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "anisotropy",
+          "position": "0.25",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "anisotropy",
+          "position": "0.5",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "anisotropy",
+          "position": "0.75",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "anisotropy",
+          "position": "1.0",
+          "status": "executed 2026-08-11 (reproduced)"
+        },
+        {
+          "descriptor": "anisotropy",
+          "position": "max",
+          "status": "completed 2026-11-04"
+        },
+        {
+          "descriptor": "anisotropy",
+          "position": "argmax",
+          "status": "completed 2026-11-04"
+        }
+      ],
+      "n_reproduced": 16,
+      "n_drifted": 0,
+      "n_completed": 8
+    }
+  },
+  "notes": "Completes the preregistered 24-cell grid; the 2026-08-11 pass executed only the 16 numeric cells. Exploratory cells do not touch the verdict \u2014 it stands on the primary tests.",
+  "items": []
+}

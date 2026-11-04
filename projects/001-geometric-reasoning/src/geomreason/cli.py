@@ -6,11 +6,14 @@
     uv run geom sweep       flip rate across a list of models
     uv run geom geometry    hidden-state geometry for one model
     uv run geom inputs      compare recorded input populations (behavior vs geometry)
+    uv run geom grid        complete the preregistered 24-cell depth grid + reconcile
 """
 
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -620,6 +623,163 @@ def correlate(
         config={"models": [p.model for p in points], "analysis": "partial spearman"},
         metrics=report, items=[],
     ).write(out or RESULTS / f"{experiment}-correlation.json")
+    console.print(f"  [green]wrote[/green] {path}\n")
+
+
+RECONCILE_FIELDS = (
+    "n",
+    "spearman_geom_flip",
+    "spearman_geom_size",
+    "partial_spearman",
+    "pearson_geom_flip",
+)
+
+
+def _values_equal(a: object, b: object) -> bool:
+    """JSON-number equality that treats NaN == NaN as equal, not as drift."""
+    if (
+        isinstance(a, float) and isinstance(b, float)
+        and math.isnan(a) and math.isnan(b)
+    ):
+        return True
+    return a == b
+
+
+def reconcile_grid(report: dict, prior: dict | None) -> dict:
+    """Reconcile a fresh grid against the prior correlation record, cell by cell.
+
+    Numeric cells are matched to prior exploratory rows by (descriptor, relative_depth);
+    a cell whose stats fields all equal the prior row is "executed <prior-date>
+    (reproduced)", any mismatch is "executed <prior-date> (DRIFT)", and a cell with no
+    prior row (the max / argmax hump cells, never in the prior record) is
+    "completed <today>". Both dates are derived at run time: the prior date from the
+    prior record's timestamp_utc ("unknown" when missing), today's from the current
+    UTC date.
+    """
+    prior_rows: dict[tuple, dict] = {}
+    if prior is not None:
+        for row in prior.get("metrics", {}).get("exploratory", []):
+            if "descriptor" in row and "relative_depth" in row:
+                prior_rows[(row["descriptor"], row["relative_depth"])] = row
+
+    prior_timestamp_utc = None if prior is None else prior.get("timestamp_utc")
+    prior_date = str(prior_timestamp_utc)[:10] if prior_timestamp_utc else "unknown"
+    completed_date = datetime.now(timezone.utc).date().isoformat()
+
+    cells: list[dict] = []
+    n_reproduced = n_drifted = n_completed = 0
+    for row in report.get("exploratory", []):
+        prior_row = None
+        if prior is not None and "relative_depth" in row:
+            prior_row = prior_rows.get((row["descriptor"], row["relative_depth"]))
+        if prior_row is None:
+            status = f"completed {completed_date}"
+            n_completed += 1
+        elif all(_values_equal(row[f], prior_row[f]) for f in RECONCILE_FIELDS):
+            status = f"executed {prior_date} (reproduced)"
+            n_reproduced += 1
+        else:
+            status = f"executed {prior_date} (DRIFT)"
+            n_drifted += 1
+        cells.append({
+            "descriptor": row["descriptor"],
+            "position": row["position"],
+            "status": status,
+        })
+
+    return {
+        "prior_timestamp_utc": prior_timestamp_utc,
+        "compared_fields": list(RECONCILE_FIELDS),
+        "cells": cells,
+        "n_reproduced": n_reproduced,
+        "n_drifted": n_drifted,
+        "n_completed": n_completed,
+    }
+
+
+@app.command()
+def grid(
+    experiment: str = typer.Option("E002"),
+    out: Path | None = typer.Option(None),
+) -> None:
+    """Run the full preregistered 24-cell depth grid and reconcile it with the prior pass.
+
+    E002 preregistered 4 descriptors x 6 depth positions = 24 tests; the 2026-08-11
+    correlation pass executed only the 16 numeric cells - the max/argmax "hump" positions
+    never ran. This command executes the whole grid, then labels every cell against the
+    prior record: identical stats reproduce the old number, a mismatch is DRIFT, an absent
+    prior row is completed today. Exploratory cells never influence the verdict; it stands
+    on the primary tests alone.
+    """
+    from . import correlate as analysis
+
+    prior_path = RESULTS / f"{experiment}-correlation.json"
+    prior = None
+    if prior_path.exists():
+        prior = json.loads(prior_path.read_text(encoding="utf-8"))
+
+    points = analysis.load_points(RESULTS, geometry_experiment=experiment)
+    if len(points) < 4:
+        console.print(f"  only {len(points)} model(s) with both geometry and flip rate — "
+                      "run 'geom geosweep' first")
+        raise typer.Exit(1)
+
+    report = analysis.run(points)
+    reconciliation = reconcile_grid(report, prior)
+    report["reconciliation"] = reconciliation
+    grid_block = report["grid"]
+
+    console.print(f"\n  [bold]{len(points)} models[/bold] — grid "
+                  f"{grid_block['n_cells_executed']}/"
+                  f"{grid_block['n_cells_preregistered']} preregistered cells executed\n")
+
+    by_cell = {(r["descriptor"], r["position"]): r for r in report["exploratory"]}
+    table = Table(title=f"{experiment} depth grid — per-cell reconciliation",
+                  title_justify="left")
+    for column in ("descriptor", "position", "n", "partial ρ", "status"):
+        table.add_column(column, justify="right")
+    for cell in reconciliation["cells"]:
+        row = by_cell[(cell["descriptor"], cell["position"])]
+        if "reproduced" in cell["status"]:
+            status = f"[green]{cell['status']}[/green]"
+        elif "DRIFT" in cell["status"]:
+            status = f"[red]{cell['status']}[/red]"
+        else:
+            status = f"[cyan]{cell['status']}[/cyan]"
+        table.add_row(cell["descriptor"], cell["position"], str(row["n"]),
+                      f"{row['partial_spearman']:+.3f}", status)
+    console.print(table)
+
+    if grid_block["complete"]:
+        console.print(f"\n  [green]grid complete[/green] — all "
+                      f"{grid_block['n_cells_preregistered']} preregistered cells executed")
+    else:
+        console.print(f"\n  [red]grid INCOMPLETE[/red] — missing: "
+                      f"{grid_block['missing_cells']}")
+    console.print(
+        f"  {reconciliation['n_reproduced']} reproduced · "
+        f"{reconciliation['n_drifted']} drifted · "
+        f"{reconciliation['n_completed']} completed "
+        f"[dim](prior: {prior_path.name if prior is not None else 'none'}, "
+        f"{reconciliation['prior_timestamp_utc']})[/dim]"
+    )
+    if reconciliation["n_drifted"]:
+        console.print("  [red]DRIFT[/red] — a prior cell no longer reproduces from the "
+                      "committed records; do not cite the old number")
+    console.print()
+
+    path = RunRecord(
+        experiment=experiment, seed=0,
+        config={
+            "models": [p.model for p in points],
+            "analysis": "grid completion (4 descriptors x 6 depth positions)",
+            "prior_record": prior_path.name if prior is not None else None,
+        },
+        metrics=report, items=[],
+        notes="Completes the preregistered 24-cell grid; the 2026-08-11 pass executed only "
+              "the 16 numeric cells. Exploratory cells do not touch the verdict — it "
+              "stands on the primary tests.",
+    ).write(out or RESULTS / f"{experiment}-grid-completion.json")
     console.print(f"  [green]wrote[/green] {path}\n")
 
 
