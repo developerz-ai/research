@@ -32,6 +32,7 @@ def _layers(
     n_layers: int = 12,
     peak_layer: int = 6,
     nan50_descriptor: str | None = None,
+    nan_last_descriptor: str | None = None,
 ) -> list[dict]:
     """Layers 0..n_layers for model i: every descriptor rises to ``peak_layer``, then falls.
 
@@ -40,6 +41,8 @@ def _layers(
     ``peak_layer / n_layers``. Layer 0 is NaN (degenerate, excluded from analysis). Setting
     ``nan50_descriptor`` poisons one descriptor at the layer nearest relative depth 0.5 in
     every model, which is how a grid cell goes missing in real data.
+    ``nan_last_descriptor`` poisons one descriptor at the final layer: the peak's
+    denominator must stay the model's full nonzero extent, not the usable layers.
     """
     layers = [{"layer": 0, **{d: float("nan") for d in DESCRIPTORS}}]
     scales = {
@@ -53,6 +56,8 @@ def _layers(
         row = {d: base * (i + 1) * s for d, s in scales.items()}
         if nan50_descriptor is not None and layer == n_layers // 2:
             row[nan50_descriptor] = float("nan")
+        if nan_last_descriptor is not None and layer == n_layers:
+            row[nan_last_descriptor] = float("nan")
         layers.append({"layer": layer, **row})
     return layers
 
@@ -130,6 +135,11 @@ def test_max_row_value_is_the_peak_descriptor_value() -> None:
     assert [e["peak_layer"] for e in max_row["per_model"]] == [6] * 12
     assert [e["model"] for e in max_row["per_model"]] == [f"m-{i}" for i in range(12)]
     assert max_row["spearman_geom_flip"] == pytest.approx(1.0)
+    # rho = 1 alone cannot catch a wrong-layer read: the depth-0.75 values (3*(i+1) here)
+    # are as rank-monotone in the flip rate as the true peaks, while the peak_layer
+    # metadata stays correct — so assert the cell's ACTUAL inputs, the peak values.
+    rows, _ = cell_rows(_ladder(), "participation_ratio", "max")
+    assert [r[0] for r in rows] == [6.0 * (i + 1) for i in range(12)]
 
 
 def test_argmax_row_value_is_the_peak_relative_depth() -> None:
@@ -144,6 +154,29 @@ def test_argmax_row_value_is_the_peak_relative_depth() -> None:
     assert argmax_row["n"] == 12
     assert [e["relative_peak_depth"] for e in argmax_row["per_model"]] == [0.5] * 12
     assert [e["model"] for e in argmax_row["per_model"]] == [f"m-{i}" for i in range(12)]
+    assert math.isnan(argmax_row["spearman_geom_flip"])
+
+
+def test_missing_final_layer_does_not_shrink_the_argmax_denominator() -> None:
+    """A descriptor NaN at the FINAL layer must not change where the peak sits.
+
+    With participation_ratio missing at layer 12, every profile still peaks at layer 6 of
+    a 12-layer stack: relative depth 6/12 = 0.5. Normalizing by the max layer where the
+    descriptor is *usable* instead records 6/11 ≈ 0.545 for every model — the denominator
+    excluded layers with missing descriptor values (review finding, PR #10).
+    """
+    ladder = _ladder(nan_last_descriptor="participation_ratio")
+    rows, per_model = cell_rows(ladder, "participation_ratio", "argmax")
+    assert [r[0] for r in rows] == [0.5] * 12
+    assert [e["relative_peak_depth"] for e in per_model] == [0.5] * 12
+    # The missing final layer changes the denominator only: the peak's identity and value
+    # are untouched, so the max cell still reads layer 6 with values 6*(i+1).
+    max_rows, max_per_model = cell_rows(ladder, "participation_ratio", "max")
+    assert [e["peak_layer"] for e in max_per_model] == [6] * 12
+    assert [r[0] for r in max_rows] == [6.0 * (i + 1) for i in range(12)]
+    report = run(ladder)
+    argmax_row = _by_cell(report)[("participation_ratio", "argmax")]
+    assert argmax_row["n"] == 12
     assert math.isnan(argmax_row["spearman_geom_flip"])
 
 

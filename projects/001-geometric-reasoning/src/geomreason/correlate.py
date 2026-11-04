@@ -106,20 +106,25 @@ class ModelPoint:
         """The layer holding the descriptor's peak: index, value, and relative depth.
 
         Same layer-0 exclusion as ``at_relative_depth``. The relative depth of the peak is
-        the Valeriani "hump" position — WHERE in the stack the descriptor peaks.
+        the Valeriani "hump" position — WHERE in the stack the descriptor peaks — and is
+        normalized by the model's FULL nonzero layer extent, not by the layers where this
+        descriptor happens to be usable: a descriptor that is NaN at the final layer must
+        not make a layer-6 peak sit at 6/11 instead of 6/12.
         """
+        nonzero = [lay for lay in self.layers if lay["layer"] > 0]
         usable = [
-            lay for lay in self.layers
-            if lay["layer"] > 0 and lay.get(descriptor) is not None
+            lay for lay in nonzero
+            if lay.get(descriptor) is not None
             and not math.isnan(lay[descriptor])
         ]
-        if not usable:
+        if not usable:  # usable ⊆ nonzero, so nonzero is non-empty here too
             return None
+        extent = max(lay["layer"] for lay in nonzero)
         best = max(usable, key=lambda lay: lay[descriptor])
         return {
             "layer": best["layer"],
             "value": best[descriptor],
-            "relative_depth": best["layer"] / max(lay["layer"] for lay in usable),
+            "relative_depth": best["layer"] / extent,
         }
 
     def max_over_layers(self, descriptor: str) -> tuple[float, float] | None:
