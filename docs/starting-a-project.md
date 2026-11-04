@@ -4,8 +4,40 @@
 uv run tools/rx.py new-project "geometric reasoning"
 ```
 
-That creates `projects/NNN-geometric-reasoning/` with a `CLAUDE.md`, `README.md`, and the
-standard subdirectories. Numbers are assigned in creation order and never reused.
+That creates `projects/NNN-geometric-reasoning/` — numbers are assigned in creation
+order and never reused — rendered from `templates/project/` with the CLI name and the
+underscore package name filled in:
+
+- `CLAUDE.md` and `README.md`
+- `pyproject.toml`: torch pinned to the PyTorch cu126 index (the default PyPI wheel is
+  CPU-only and fails silently), a typer CLI, and a `dev` extra with pytest and ruff.
+  `new-project` runs `uv lock` right there, so the lock exists before your first sync.
+- `src/<pkg>/` with `device.py` (the only module allowed to name a vendor backend),
+  `cli.py` (`doctor` + `smoke`), and `provenance.py` (run records)
+- `tests/test_scaffold.py`, so `uv run pytest -q` has something real to run from day one
+- the standard subdirectories: `experiments/`, `notes/`, `results/`, `data/`, `explore/`,
+  `tests/`
+- one appended `uv` entry in `.github/dependabot.yml`, so the weekly updater discovers
+  the project
+
+If `uv lock` could not run — offline, or no uv on PATH — the scaffolder says so, and
+`uv run tools/rx.py check` keeps flagging the missing `uv.lock` until you generate and
+commit it. That visibility is deliberate: a uv-managed project with no committed lock
+is invisible to the updater.
+
+First commands in the new project:
+
+For ROCm (Linux) or CPU-only wheels, first edit the `pytorch` index URL in the new
+project's `pyproject.toml`: use `https://download.pytorch.org/whl/rocm6.2` or
+`https://download.pytorch.org/whl/cpu`, respectively. The sync below updates `uv.lock`;
+commit both files together. A one-shot `uv sync --index` override is not persistent:
+subsequent `uv run` commands sync against the manifest and can replace that wheel.
+
+```bash
+cd projects/NNN-geometric-reasoning
+uv sync                # add --extra dev for pytest and ruff
+uv run <slug> doctor   # verify the backend BEFORE anything else
+```
 
 ## Before you write code
 

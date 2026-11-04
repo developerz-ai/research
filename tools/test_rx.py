@@ -6,6 +6,10 @@ configuration, and until now no test pinned it: deleting ``_check_dependency_upd
 and ``_lock_divergences`` outright would leave the suite green. These tests drive the
 validation against a synthetic tree so each failure mode is asserted separately.
 
+The scaffold tests at the end drive ``cmd_new_project`` against the real
+``templates/`` directory, so template drift fails here instead of at the next
+project's creation.
+
 Run from the repo root:
 
     uv run --with pytest pytest tools/test_rx.py -q
@@ -13,9 +17,15 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import re
+import shutil
 import sys
+import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -476,3 +486,353 @@ def test_lock_divergences_compare_specifiers_not_just_names(tmp_path: Path) -> N
     lock = _write(tmp_path / "uv.lock", UV_LOCK.format(name="testpkg"))
     divergences = rx._lock_divergences(pyproject, lock)
     assert any("'numpy'" in d and "'>=2'" in d and "'>=1.26'" in d for d in divergences)
+
+
+# ── scaffolding: cmd_new_project renders a project that boots ─────────────────
+
+REAL_TEMPLATES = _RX_PATH.parent.parent / "templates"
+PLACEHOLDER = re.compile(r"\{\{[A-Za-z_][A-Za-z0-9_]*\}\}")
+
+# A uv.lock that resolves exactly the rendered manifest (torch on the pinned pytorch
+# index, typer, rich, and the dev extra). Written by hand: the tests must not run uv.
+GENERATED_LOCK = """\
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "{pkg}"
+version = "0.1.0"
+source = {{ editable = "." }}
+
+[package.optional-dependencies]
+dev = [
+    {{ name = "pytest" }},
+    {{ name = "ruff" }},
+]
+
+[package.metadata]
+requires-dist = [
+    {{ name = "rich", specifier = ">=13.7" }},
+    {{ name = "torch", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cu126" }},
+    {{ name = "typer", specifier = ">=0.12" }},
+    {{ name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" }},
+    {{ name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" }},
+]
+"""
+
+
+@pytest.fixture
+def scaffold_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A synthetic repo root pointed at the REAL templates dir, with uv absent.
+
+    Nothing may write into the real projects/ or .github/, and nothing may reach
+    the network: 'which' reports no uv, so the scaffolder's best-effort lock step
+    is skipped instead of run.
+    """
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx, "TEMPLATES", REAL_TEMPLATES)
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    _write(
+        tmp_path / ".github" / "dependabot.yml",
+        DEPENDABOT.format(ecosystem="uv", directory="/projects/000-existing"),
+    )
+    return tmp_path
+
+
+def _scaffold(tree: Path, name: str = "widget physics") -> Path:
+    assert rx.main(["new-project", name]) == 0
+    return tree / "projects" / "001-widget-physics"
+
+
+def test_new_project_renders_a_parsable_manifest(scaffold_tree: Path) -> None:
+    """Generated pyproject: valid TOML wiring the CLI, the index pin, the dev extra."""
+    dest = _scaffold(scaffold_tree)
+    manifest = tomllib.loads((dest / "pyproject.toml").read_text(encoding="utf-8"))
+    assert manifest["project"]["name"] == "widget_physics"
+    # rx status discovers the CLI through exactly this line.
+    assert manifest["project"]["scripts"]["widget-physics"] == "widget_physics.cli:app"
+    uv = manifest["tool"]["uv"]
+    assert any(i["name"] == "pytorch" for i in uv["index"])
+    assert uv["sources"]["torch"] == [{"index": "pytorch"}]
+    dev = {rx._requirement_parts(r)[0]
+           for r in manifest["project"]["optional-dependencies"]["dev"]}
+    assert dev == {"pytest", "ruff"}
+    ignores = manifest["tool"]["ruff"]["lint"]["per-file-ignores"]
+    assert ignores["src/widget_physics/device.py"] == ["PTH"]
+    assert ignores["src/widget_physics/cli.py"] == ["B008"]
+
+
+def test_new_project_renders_the_advertised_tree(scaffold_tree: Path) -> None:
+    """src modules, tests, and every directory the generated CLAUDE.md names exist."""
+    dest = _scaffold(scaffold_tree)
+    for sub in ("experiments", "notes", "results", "data", "explore"):
+        assert (dest / sub).is_dir(), sub
+    pkg = dest / "src" / "widget_physics"
+    for module in ("__init__.py", "device.py", "cli.py", "provenance.py"):
+        assert (pkg / module).is_file(), module
+    assert (dest / "tests" / "test_scaffold.py").is_file()
+
+    # Static checks only: importing the rendered package would need torch, which the
+    # root test environment does not have — and must not need.
+    device = ast.parse((pkg / "device.py").read_text(encoding="utf-8"))
+    defined = {n.name for n in ast.walk(device)
+               if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+    assert {"DeviceInfo", "get_device_info", "pick_device", "autocast_dtype",
+            "seed_everything"} <= defined
+    cli = ast.parse((pkg / "cli.py").read_text(encoding="utf-8"))
+    assert {"doctor", "smoke"} <= {n.name for n in ast.walk(cli)
+                                   if isinstance(n, ast.FunctionDef)}
+    prov = ast.parse((pkg / "provenance.py").read_text(encoding="utf-8"))
+    assert "RunRecord" in {n.name for n in ast.walk(prov) if isinstance(n, ast.ClassDef)}
+    # The rendered tests import the package by its rendered underscore name.
+    assert "from widget_physics import provenance" in \
+        (dest / "tests" / "test_scaffold.py").read_text(encoding="utf-8")
+
+
+def test_no_rendered_file_keeps_a_placeholder(scaffold_tree: Path) -> None:
+    dest = _scaffold(scaffold_tree)
+    for f in dest.rglob("*"):
+        if f.is_file():
+            body = f.read_text(encoding="utf-8")
+            assert not PLACEHOLDER.search(body), f"{f.name}: {PLACEHOLDER.search(body)!r}"
+
+
+def test_new_project_appends_exactly_one_uv_dependabot_entry(
+    scaffold_tree: Path,
+) -> None:
+    """One new entry for /projects/<new-dir>; every existing byte stays identical."""
+    manifest = scaffold_tree / ".github" / "dependabot.yml"
+    before = manifest.read_bytes()
+    _scaffold(scaffold_tree)
+    after = manifest.read_bytes()
+    assert after.startswith(before)
+    appended = after[len(before):].decode("utf-8")
+    assert appended == rx._DEPENDABOT_UV_ENTRY.format(directory="001-widget-physics")
+    entries = rx._dependabot_entries(after.decode("utf-8"))
+    assert [(e["package-ecosystem"], e["directory"]) for e in entries] == [
+        ("uv", "/projects/000-existing"),
+        ("uv", "/projects/001-widget-physics"),
+    ]
+
+
+def test_dependabot_append_is_idempotent(scaffold_tree: Path) -> None:
+    """Re-appending an existing entry is a no-op, not a duplicate."""
+    rx._append_dependabot_entry("001-widget-physics")
+    once = (scaffold_tree / ".github" / "dependabot.yml").read_bytes()
+    note = rx._append_dependabot_entry("001-widget-physics")
+    assert "already present" in note
+    assert (scaffold_tree / ".github" / "dependabot.yml").read_bytes() == once
+
+
+def test_uv_lock_failure_warns_with_the_remedy(
+    scaffold_tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """uv absent: the scaffolder says so, and the missing lock stays rx-check-visible."""
+    dest = _scaffold(scaffold_tree)
+    assert not (dest / "uv.lock").exists()
+    out = capsys.readouterr().out
+    assert "uv.lock NOT generated" in out
+    assert "uv lock" in out and "commit uv.lock" in out
+    assert _problems() == [
+        "projects/001-widget-physics/uv.lock: missing - the uv ecosystem has nothing to "
+        "discover"
+    ]
+
+
+def test_generated_project_is_clean_once_a_matching_lock_lands(
+    scaffold_tree: Path,
+) -> None:
+    """With a lock that resolves the rendered manifest, check has nothing to say."""
+    dest = _scaffold(scaffold_tree)
+    _write(dest / "uv.lock", GENERATED_LOCK.format(pkg="widget_physics"))
+    assert _problems() == []
+
+
+def test_scaffold_self_validation_fails_on_template_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The guard: a template that stops satisfying the scaffold contract dies loudly."""
+    broken = tmp_path / "templates"
+    shutil.copytree(REAL_TEMPLATES, broken)
+    pp = broken / "project" / "pyproject.toml"
+    # Break the CLI wiring while keeping the TOML parseable, so the failure is
+    # attributed by the scaffold contract, not by the TOML parser.
+    pp.write_text(
+        pp.read_text(encoding="utf-8").replace(
+            '{{SLUG}} = "{{PKG}}.cli:app"', 'other-cli = "{{PKG}}.cli:app"'),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx, "TEMPLATES", broken)
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    _write(
+        tmp_path / ".github" / "dependabot.yml",
+        DEPENDABOT.format(ecosystem="uv", directory="/projects/000-existing"),
+    )
+    with pytest.raises(SystemExit) as exc:
+        rx.main(["new-project", "widget physics"])
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "[project.scripts]" in out
+    assert "does not parse" not in out
+    # A scaffold that failed validation must not touch the updater manifest.
+    body = (tmp_path / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    assert "000-existing" in body
+    assert "/projects/001-widget-physics" not in body
+
+
+@pytest.fixture
+def broken_template_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """scaffold_tree, but on a private *copy* of the real templates.
+
+    A test that corrupts a template must corrupt a copy: the real templates/
+    directory is shared and stays pristine.
+    """
+    broken = tmp_path / "templates"
+    shutil.copytree(REAL_TEMPLATES, broken)
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx, "TEMPLATES", broken)
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    _write(
+        tmp_path / ".github" / "dependabot.yml",
+        DEPENDABOT.format(ecosystem="uv", directory="/projects/000-existing"),
+    )
+    return broken
+
+
+def test_unreplaced_placeholder_fails_validation(
+    broken_template_tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The 'no {{...}} survives render' contract has a failing test.
+
+    Renaming a template's {{SLUG}} to a field render() never supplies leaves it
+    verbatim in the output; the validator branch must die on it at creation
+    instead of shipping the placeholder inside src/<pkg>/__init__.py.
+    """
+    init = broken_template_tree / "project" / "__init__.py"
+    init.write_text(
+        init.read_text(encoding="utf-8").replace("{{SLUG}}", "{{SLUGX}}"),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        rx.main(["new-project", "widget physics"])
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "src/widget_physics/__init__.py: unreplaced placeholder {{SLUGX}}" in out
+
+
+def test_failed_validation_removes_the_scaffold(
+    broken_template_tree: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The zombie-dir bug: a scaffold that fails validation leaves nothing behind.
+
+    A leftover projects/NNN-slug/ blocks the retry with 'already exists' or
+    silently burns the next number (numbers are never reused), and rx check
+    would flag its missing uv.lock and dependabot entry forever.
+    """
+    pp = broken_template_tree / "project" / "pyproject.toml"
+    pp.write_text(
+        pp.read_text(encoding="utf-8").replace(
+            '{{SLUG}} = "{{PKG}}.cli:app"', 'other-cli = "{{PKG}}.cli:app"'
+        ),
+        encoding="utf-8",
+    )
+    dest = rx.PROJECTS / "001-widget-physics"
+    with pytest.raises(SystemExit) as exc:
+        rx.main(["new-project", "widget physics"])
+    assert exc.value.code == 1
+    assert not dest.exists()
+    assert "removed projects/001-widget-physics" in capsys.readouterr().out
+    # Once the template is fixed, the retry reuses the number instead of dying
+    # on 'already exists' or quietly becoming 002.
+    monkeypatch.setattr(rx, "TEMPLATES", REAL_TEMPLATES)
+    assert rx.main(["new-project", "widget physics"]) == 0
+    assert (dest / "pyproject.toml").is_file()
+    entries = rx._dependabot_entries(
+        (rx.ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    assert [e["directory"] for e in entries].count("/projects/001-widget-physics") == 1
+
+
+def test_uv_lock_nonzero_exit_warns_with_reason(
+    scaffold_tree: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The failed-lock branch: a uv that runs but exits non-zero is reported.
+
+    The last stderr line is the reason, the missing lock stays rx-check-visible,
+    and no uv.lock is left half-written on disk.
+    """
+
+    class _Failed:
+        returncode = 2
+        stdout = ""
+        stderr = "error: resolution failed\nhint: pytorch index unreachable"
+
+    monkeypatch.setattr(rx.shutil, "which", lambda name: "/usr/local/bin/uv")
+    monkeypatch.setattr(rx.subprocess, "run", lambda *a, **k: _Failed())
+    dest = _scaffold(scaffold_tree)
+    assert not (dest / "uv.lock").exists()
+    out = capsys.readouterr().out
+    assert "uv lock failed (hint: pytorch index unreachable)" in out
+    assert "uv.lock NOT generated" in out
+    assert "commit uv.lock" in out
+
+
+@pytest.mark.parametrize("command", ["doctor", "smoke"])
+@pytest.mark.parametrize("decorator", ["", '@app.command("renamed")\n', '@other.command()\n'])
+def test_missing_command_registration_fails_validation(
+    broken_template_tree: Path, capsys: pytest.CaptureFixture[str],
+    command: str, decorator: str,
+) -> None:
+    cli = broken_template_tree / "project" / "cli.py"
+    _write(cli, cli.read_text(encoding="utf-8").replace(
+        f"@app.command()\ndef {command}", f"{decorator}def {command}"))
+    with pytest.raises(SystemExit) as exc:
+        rx.main(["new-project", "widget physics"])
+    assert exc.value.code == 1
+    assert f"{command} is not registered on app" in capsys.readouterr().out
+    assert not (rx.PROJECTS / "001-widget-physics").exists()
+
+
+def test_scaffold_run_record_concurrent_writers(
+    scaffold_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dest = _scaffold(scaffold_tree)
+    spec = importlib.util.spec_from_file_location(
+        "scaffold_provenance", dest / "src" / "widget_physics" / "provenance.py")
+    assert spec and spec.loader
+    provenance = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, provenance)
+    spec.loader.exec_module(provenance)
+    barrier = Barrier(2)
+    monkeypatch.setattr(provenance, "git_sha", lambda: "test-sha")
+
+    def hardware():
+        barrier.wait(timeout=10)
+        return {"accelerator": "test"}
+
+    monkeypatch.setattr(provenance, "hardware", hardware)
+    path = dest / "results" / "E000-race.json"
+
+    def write(seed):
+        try:
+            provenance.RunRecord("E000", seed, {"seed": seed}, items=[{"seed": seed}]).write(path)
+        except FileExistsError:
+            return None
+        return seed
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, [1, 2]))
+    winners = [seed for seed in results if seed is not None]
+    assert len(winners) == 1
+    record = provenance.load(path)
+    assert record["seed"] == winners[0]
+    assert record["items"] == [{"seed": winners[0]}]
