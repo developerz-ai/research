@@ -12,6 +12,12 @@ that class of mistake visible immediately rather than after a writeup.
 
 Read the output as a ceiling on triviality: **any family where a heuristic scores well above
 chance (0.25) is not measuring reasoning**, and a model's score there says nothing.
+
+That contract is enforced, not remembered: ``geom eval`` and ``geom sweep`` refuse to score a
+population where any family's best heuristic exceeds ``ADMISSIBLE_CEILING`` — nonzero exit,
+no model load, no run record. ``geom baselines`` prints the full table on demand and
+itself exits nonzero when a family crosses the ceiling — it is how you read the numbers
+behind a refusal.
 """
 
 from __future__ import annotations
@@ -20,6 +26,12 @@ from collections.abc import Callable
 
 from .items import Item
 from .metrics import FlipRateResult, score_pairs
+
+# The preregistered admissibility line (E001, 2026-08-11): a family whose best
+# trivial-heuristic flip rate exceeds this is not measuring reasoning, and every number
+# taken on it is discarded. Defined here ONCE — `geom baselines`, `geom eval`, `geom sweep`
+# and the tests import it; there is no second literal.
+ADMISSIBLE_CEILING = 0.40
 
 # A heuristic returns a chosen option index, or None if it does not apply to this item.
 Heuristic = Callable[[Item], int | None]
@@ -134,3 +146,17 @@ def worst_case_per_family(items: list[Item]) -> dict[str, tuple[str, float]]:
             if best is None or sub.flip_rate > best[1]:
                 per_family[family] = (name, sub.flip_rate)
     return per_family
+
+
+def admissibility_violations(items: list[Item]) -> dict[str, tuple[str, float]]:
+    """Families whose best-heuristic flip rate exceeds ``ADMISSIBLE_CEILING``.
+
+    The enforced form of :func:`worst_case_per_family`: ``geom eval`` and ``geom sweep``
+    call this on the exact population about to be measured and refuse to run when it is
+    non-empty, so a family a heuristic can ace never reaches a run record.
+    """
+    return {
+        family: worst
+        for family, worst in worst_case_per_family(items).items()
+        if worst[1] > ADMISSIBLE_CEILING
+    }

@@ -34,7 +34,7 @@ FALSIFY_THRESHOLD = 0.3
 # sits (the Valeriani "hump" position). Labels are the agreed record vocabulary.
 GRID_POSITIONS = ("0.25", "0.5", "0.75", "1.0", "max", "argmax")
 PRIMARY_POSITION = "0.75"  # the primary test, as a grid label
-_POSITION_FRACTIONS = dict(zip(GRID_POSITIONS[:4], RELATIVE_DEPTHS))
+_POSITION_FRACTIONS = dict(zip(GRID_POSITIONS[:4], RELATIVE_DEPTHS, strict=True))
 assert _POSITION_FRACTIONS[PRIMARY_POSITION] == PRIMARY_DEPTH
 
 

@@ -11,7 +11,7 @@ any one cell from run()'s exploratory output fails here.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -235,7 +235,7 @@ def test_reconciliation_labels_reproduced_and_completed() -> None:
     report = run(_ladder())
     reconciliation = reconcile_grid(report, _prior_from(report))
     status = _statuses(reconciliation)
-    completed_label = f"completed {datetime.now(timezone.utc).date().isoformat()}"
+    completed_label = f"completed {datetime.now(UTC).date().isoformat()}"
     for d in DESCRIPTORS:
         for p in NUMERIC_POSITIONS:
             assert status[(d, p)] == "executed 2026-08-11 (reproduced)"
