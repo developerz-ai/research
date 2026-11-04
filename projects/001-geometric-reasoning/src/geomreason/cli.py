@@ -5,6 +5,7 @@
     uv run geom eval        flip rate for one model
     uv run geom sweep       flip rate across a list of models
     uv run geom geometry    hidden-state geometry for one model
+    uv run geom inputs      compare recorded input populations (behavior vs geometry)
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from rich.table import Table
 
 from . import baselines as baseline_lib
 from . import geometry as geom_metrics
+from . import inputs as inputs_lib
 from . import items as item_gen
 from . import metrics as metric_lib
 from .device import enable_fast_matmul, get_device_info, seed_everything
@@ -27,6 +29,46 @@ app = typer.Typer(add_completion=False, help=__doc__, no_args_is_help=True)
 console = Console()
 
 RESULTS = Path(__file__).resolve().parents[2] / "results"
+
+
+def _is_flip_record(record: dict) -> bool:
+    """True only for an actual behavior record: flip-rate metrics and per-item prompts.
+
+    A standalone ``geometry --experiment E001`` run writes ``E001-geom-<model>.json`` —
+    ``items=[]`` with layer metrics — which sorts *before* ``E001-<model>-seed0.json``.
+    Selected as the behavior record it would match geosweep against the geometry run's
+    own population (rebuilding exactly the E001/E002 mismatch) and make ``geom inputs``
+    reject the pair as unusable. Filter on what the record carries, not its filename.
+    """
+    items = record.get("items")
+    metrics = record.get("metrics")
+    return (
+        isinstance(items, list)
+        and bool(items)
+        and all(isinstance(item, dict) and "prompt" in item for item in items)
+        and isinstance(metrics, dict)
+        and "flip_rate" in metrics
+    )
+
+
+def _flip_records_by_model() -> dict[str, tuple[Path, dict]]:
+    """First flip-rate record per model, in sorted path order.
+
+    The record a geometry run must match: it carries the n_per_family and seed the
+    matched population was drawn with. Sorted-path-first keeps this deterministic when
+    a model has several seed runs. Candidates are filtered to actual behavior records
+    (:func:`_is_flip_record`) — anything else in the glob is not a population a geometry
+    run can be matched against.
+    """
+    found: dict[str, tuple[Path, dict]] = {}
+    for path in sorted(RESULTS.glob("E001*.json")):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if not _is_flip_record(record):
+            continue
+        model = record.get("config", {}).get("model")
+        if model and model not in found:
+            found[model] = (path, record)
+    return found
 
 
 def _print_result(model: str, result: metric_lib.FlipRateResult) -> None:
@@ -181,6 +223,7 @@ def eval(
 
     pairs = item_gen.generate(n_per_family=n, seed=seed)
     flat = item_gen.flatten(pairs)
+    prompts = [item.prompt for item in flat]
     console.print(f"  {len(pairs)} pairs / {len(flat)} items, seed {seed}")
 
     with console.status(f"loading {model}…"):
@@ -211,6 +254,12 @@ def eval(
             "families": sorted(item_gen.FAMILIES),
             "batch_size": batch_size,
             "aggregation": aggregation,
+            "n_items": len(flat),
+            "prompt_digest": inputs_lib.population_digest(prompts),
+            "input_population": inputs_lib.population_block(
+                n_per_family=n, seed=seed, families=list(item_gen.FAMILIES),
+                max_samples=0, prompts=prompts,
+            ),
         },
         metrics=result.as_dict(),
         items=records,
@@ -246,14 +295,24 @@ def sweep(
 @app.command()
 def geometry(
     model: str = typer.Option("gpt2"),
-    n: int = typer.Option(64, help="pairs per family to draw prompts from"),
+    n: int = typer.Option(100, help="pairs per family (default matches geom eval)"),
     seed: int = typer.Option(0),
     batch_size: int = typer.Option(8),
-    max_samples: int = typer.Option(384),
+    max_samples: int = typer.Option(0, help="prompt cap; 0 = no truncation"),
     out: Path | None = typer.Option(None),
     experiment: str = typer.Option("E002"),
 ) -> None:
     """Hidden-state geometry per layer, on the same prompts used for flip rate."""
+    # Unlike eval's default record name, this one carries no seed: a second standalone
+    # run at a different seed would collide with the existing record. Refuse before any
+    # compute, as geosweep does; an explicitly passed --out (geosweep's call) is unguarded.
+    if out is None:
+        out = RESULTS / f"{experiment}-geom-{model.replace('/', '_')}.json"
+        if out.exists():
+            console.print(
+                f"  [red]refusing to overwrite[/red] {out} — pass --out or delete the record"
+            )
+            raise typer.Exit(1)
     from .evaluate import load_model
 
     seed_everything(seed)
@@ -261,12 +320,17 @@ def geometry(
 
     pairs = item_gen.generate(n_per_family=n, seed=seed)
     prompts = [item.prompt for item in item_gen.flatten(pairs)]
+    if max_samples > 0:
+        # Truncate here and record the truncated list below. collect_hidden_states would
+        # otherwise truncate internally, leaving the record silent about the exact
+        # prompts the model saw — the silence that hid the E001/E002 population mismatch.
+        prompts = prompts[:max_samples]
 
     with console.status(f"loading {model}…"):
         loaded = load_model(model)
     with console.status("collecting hidden states…"):
         per_layer = geom_metrics.collect_hidden_states(
-            loaded, prompts, batch_size=batch_size, max_samples=max_samples
+            loaded, prompts, batch_size=batch_size, max_samples=len(prompts)
         )
     with console.status("computing descriptors…"):
         described = [geom_metrics.describe_layer(acts, layer)
@@ -285,12 +349,15 @@ def geometry(
     console.print("\n  [dim]correlational only — a metric that tracks robustness may still "
                   "be a passenger, not a cause[/dim]")
 
-    out = out or RESULTS / f"{experiment}-geometry-{model.replace('/', '_')}-seed{seed}.json"
     path = RunRecord(
         experiment=experiment,
         seed=seed,
         config={"model": model, "n_params": loaded.n_params, "n_per_family": n,
-                "max_samples": max_samples, "n_prompts": min(len(prompts), max_samples)},
+                "max_samples": max_samples, "n_prompts": len(prompts),
+                "input_population": inputs_lib.population_block(
+                    n_per_family=n, seed=seed, families=list(item_gen.FAMILIES),
+                    max_samples=max_samples, prompts=prompts,
+                )},
         metrics={"layers": [lg.as_dict() for lg in described]},
         items=[],
         notes="Our operationalisation of an undefined term; all descriptors preregistered "
@@ -360,21 +427,28 @@ def export(
 
 @app.command()
 def geosweep(
-    models: str = typer.Option("", help="comma-separated; default = every model in results/"),
-    n: int = typer.Option(24, help="pairs per family to draw prompts from"),
-    seed: int = typer.Option(0),
+    models: str = typer.Option(
+        "", help="comma-separated; default = every model with a flip-rate record"
+    ),
     batch_size: int = typer.Option(8),
-    max_samples: int = typer.Option(288),
+    max_samples: int = typer.Option(
+        0, help="prompt cap; 0 = no truncation (matched to the flip-rate population)"
+    ),
     experiment: str = typer.Option("E002"),
 ) -> None:
-    """Collect hidden-state geometry for every model that has a flip-rate result."""
+    """Collect hidden-state geometry for every model that has a flip-rate result.
+
+    n_per_family and seed are derived from each model's own flip-rate record, so the
+    geometry prompts and the flip-rate prompts are identical by construction instead of
+    identical by assumption — the assumption failed once (geometry ran 24/family against
+    a 100/family flip rate) and nothing flagged it. Truncating with --max-samples keeps
+    only a prefix of that population, which breaks identity; say so in the writeup.
+    """
+    flip_by_model = _flip_records_by_model()
     if models.strip():
         wanted = [m.strip() for m in models.split(",") if m.strip()]
     else:
-        wanted = sorted({
-            json.loads(p.read_text(encoding="utf-8")).get("config", {}).get("model")
-            for p in RESULTS.glob("E001*.json")
-        } - {None})
+        wanted = sorted(flip_by_model)
 
     console.print(f"\n  {len(wanted)} model(s) to profile\n")
     for model in wanted:
@@ -382,6 +456,15 @@ def geosweep(
         if out.exists():
             console.print(f"  [dim]skip[/dim] {model} — already profiled")
             continue
+        entry = flip_by_model.get(model)
+        if entry is None:
+            console.print(f"  [red]skip[/red] {model} — no flip-rate record to match")
+            continue
+        n = entry[1].get("config", {}).get("n_per_family")
+        if n is None:
+            console.print(f"  [red]skip[/red] {model} — flip-rate record has no n_per_family")
+            continue
+        seed = entry[1].get("seed", 0)
         console.rule(f"[bold]{model}")
         try:
             geometry(model=model, n=n, seed=seed, batch_size=batch_size,
@@ -390,6 +473,96 @@ def geosweep(
             raise
         except Exception as exc:
             console.print(f"  [red]failed[/red] {model}: {type(exc).__name__}: {exc}\n")
+
+
+@app.command()
+def inputs(
+    experiment: str = typer.Option("E002", help="experiment id of the geometry records"),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="exit nonzero unless every geometry population is identical to its "
+             "flip-rate population",
+    ),
+) -> None:
+    """Compare each model's geometry input population with its flip-rate population.
+
+    E002's premise is that both measurements saw the same prompts; this checks that
+    premise against the committed records instead of assuming it. Behavior populations
+    are rebuilt from config and verified against the stored per-item prompts; geometry
+    populations are rebuilt from config alone (legacy records store no prompt list) and
+    compared by digest and family-level overlap.
+    """
+    flip_by_model = _flip_records_by_model()
+    geom_paths = sorted(RESULTS.glob(f"{experiment}-geom-*.json"))
+    if not geom_paths:
+        console.print(f"  no geometry records matching {experiment}-geom-*.json in {RESULTS}")
+        raise typer.Exit(1)
+
+    table = Table(
+        title=f"input populations — {experiment} geometry vs flip rate", title_justify="left"
+    )
+    for column in ("model", "behavior", "digest", "geometry", "digest", "shared",
+                   "first family only", "identical"):
+        table.add_column(column, justify="right")
+
+    all_identical = True
+    all_rebuilt = True
+    for path in geom_paths:
+        grec = json.loads(path.read_text(encoding="utf-8"))
+        model = grec.get("config", {}).get("model")
+        try:
+            geo = inputs_lib.from_geometry_record(grec)
+        except ValueError as exc:
+            all_rebuilt = False
+            console.print(f"  [red]{path.name}[/red]: {exc}")
+            continue
+        entry = flip_by_model.get(model)
+        if entry is None:
+            all_identical = False
+            table.add_row(str(model), "-", "-", str(len(geo.prompts)), geo.digest,
+                          "-", "-", "-")
+            continue
+        try:
+            beh = inputs_lib.from_behavior_record(entry[1])
+        except ValueError as exc:
+            all_rebuilt = False
+            console.print(f"  [red]{model}[/red] behavior record unusable: {exc}")
+            continue
+        comp = inputs_lib.compare(beh, geo)
+        all_identical = all_identical and comp.identical
+        # confined_to_first_family is vacuously true at zero overlap — nothing shared is
+        # trivially "all from one family" — and a green yes there would claim a signature
+        # nothing backs. Report n/a unless something is actually shared.
+        confined = (
+            "[green]yes[/green]" if comp.confined_to_first_family else "[red]no[/red]"
+        ) if comp.n_shared else "[dim]n/a[/dim]"
+        table.add_row(
+            str(model), str(len(beh.prompts)), beh.digest, str(len(geo.prompts)),
+            geo.digest, str(comp.n_shared),
+            confined,
+            "[green]yes[/green]" if comp.identical else "[red]no[/red]",
+        )
+
+    console.print()
+    console.print(table)
+    # Green requires more than "nothing compared unequal": a record skipped for an
+    # invalid digest or an unusable behavior record verified no population at all, and
+    # an "identical inputs" line over it would certify a premise nobody checked.
+    if all_identical and all_rebuilt:
+        console.print("  [green]identical inputs[/green] — geometry ran on the flip-rate "
+                      "prompts\n")
+    else:
+        if not all_rebuilt:
+            console.print(
+                "  [red]verification incomplete[/red] — some populations could not be "
+                "rebuilt from their records (above); a skipped record verifies nothing\n"
+            )
+        if not all_identical:
+            console.print("  [red]identical-input premise broken[/red] — geometry prompts "
+                          "differ from the flip-rate prompts; the shared overlap is "
+                          "family-attributed above\n")
+    if not all_rebuilt or (strict and not all_identical):
+        raise typer.Exit(1)
 
 
 @app.command()
