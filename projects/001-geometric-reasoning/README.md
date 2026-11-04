@@ -43,7 +43,7 @@ Two things make this project worth running:
 | [E001](experiments/E001-flip-rate-across-scale.md) | Flip rate across GPT-2, 124M→1.5B | **analysed** | Nothing reaches chance — but this turned out to be about GPT-2, not about small models |
 | [E001b](experiments/E001b-modern-small-models.md) | Same, on 2024 models (SmolLM2, Qwen2.5) | **analysed** | 3–8× higher at matched size; reverses E001's reading |
 | [E001c](experiments/E001c-current-generation.md) | Same, on 2026 models (Qwen3/3.5, SmolLM3) | **analysed** | 1.88B reaches 0.772 with zero shortcut gap; 9B reaches 0.968 |
-| [E002](experiments/E002-geometry-vs-robustness.md) | Does any hidden-state geometric descriptor track flip rate independently of size? | **analysed** | **Confounded → no.** Best surviving \|partial ρ\| = 0.006 |
+| [E002](experiments/E002-geometry-vs-robustness.md) | Does any hidden-state geometric descriptor track flip rate independently of size? | **analysed** | **Confounded → no.** Best surviving \|partial ρ\| = 0.006 (n=12, GPT-2 family removed) |
 
 None required training; all four ran in an afternoon.
 
@@ -51,9 +51,10 @@ None required training; all four ran in an afternoon.
 
 **Geometry does not predict reasoning robustness once you control for size.**
 
-Across 16 models, every geometric descriptor correlates strongly with flip rate at first
-glance (ρ up to +0.850). Essentially all of it is size. Control for parameter count and drop
-the GPT-2 family, and the best surviving partial correlation is **0.006** — against a
+Across **n=16** — every measured model, no exclusions — every geometric descriptor
+correlates strongly with flip rate at first glance (ρ up to +0.850). Essentially all of it is
+size. Control for parameter count and drop the GPT-2 family (**n=12**, the same 16 minus the
+four GPT-2 models), and the best surviving partial correlation is **0.006** — against a
 falsification threshold of 0.3 fixed before the code was written.
 
 The apparent signal was four 2019 models sitting in a corner: old models have both worse
@@ -65,7 +66,7 @@ empty, so the expensive matched-training experiment is not justified on this evi
 
 ## Findings so far
 
-**12 models, 2019 → 2026, 124M → 9B, 600 fresh pairs each** `[ours]`
+**16 models, 2019 → 2026, 124M → 9B, 600 fresh pairs each** `[ours]`
 
 | Model | Params | Year | Flip rate | Shortcut gap | Stickiness |
 |---|---|---|---|---|---|
@@ -110,11 +111,15 @@ empty, so the expensive matched-training experiment is not justified on this evi
 
 **Consequence:** E002 is unblocked — flip rate now spans 0.048 → 0.968, ample variance to
 correlate geometric descriptors against. Restrict to **≤2B**, where the shortcut gap is
-still non-zero and the metric discriminates. Remaining gaps:
+still non-zero and the metric discriminates. **Not applied:** E002 ran the full **16-model**
+ladder, including Qwen2.5-7B and Qwen3.5-9B — see
+[E002](experiments/E002-geometry-vs-robustness.md). Remaining gaps:
 
 - **~100M current generation is still unmeasured.** `nanowhale-100m-base` failed to load
-  correctly and is the single most relevant data point for the source's ~124M claim. Needs a
-  transformers version matching `DeepseekV4ForCausalLM`.
+  correctly: it was **excluded before it was ever a valid measurement** (partly
+  randomly-initialised weights, 0.013, quarantined in `results/superseded/`), so it is not
+  one of the 16 models in the table above — and it is the single most relevant data point for
+  the source's ~124M claim. Needs a transformers version matching `DeepseekV4ForCausalLM`.
 - **Seeds.** E001b/E001c are single-seed. The large gaps are safe (E001 spread was ≤0.06) but
   the Qwen3-0.6B vs Qwen3-1.7B near-tie (0.483 vs 0.498) is not resolvable at one seed.
 - **E001d** — add a digit-separated variant of the `arithmetic` family. Later reading

@@ -41,7 +41,7 @@ work is, and every choice below is a place the test could fail to be a test of t
 | `[source]` | Michels asserts geometry determines reasoning | [[library/sources/michels-sophontic-interview]] C1 |
 | `[lit]` | Representation geometry is real, measurable, causally relevant | [[library/ideas/linear-representation-hypothesis]] |
 | `[lit]` | Rival explanation: data quality/curriculum produces the same outcome with no geometry | [[library/ideas/data-quality-over-scale]] |
-| `[ours]` | **No descriptor survives.** Best \|partial ρ\| = 0.006 across 16 models once size is controlled and GPT-2 is removed. Raw ρ up to +0.850 is entirely mediated by size. | `experiments/E002-geometry-vs-robustness.md` |
+| `[ours]` | **No descriptor survives.** The **n=16** primary — all measured models, no exclusions — puts the best \|partial ρ\| at **+0.692**; the raw ρ up to +0.850 is entirely mediated by size. The best *surviving* \|partial ρ\|, **0.006**, comes from the **n=12** subset: the same 16 minus the four GPT-2 models. | `experiments/E002-geometry-vs-robustness.md` |
 
 ## Cheap test first
 
