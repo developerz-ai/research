@@ -20,7 +20,8 @@ from types import SimpleNamespace
 import numpy as np
 from typer.testing import CliRunner
 
-from geomreason import cli, evaluate, geometry as geom_metrics, inputs
+from geomreason import cli, evaluate, inputs
+from geomreason import geometry as geom_metrics
 from geomreason.evaluate import LoadedModel
 from geomreason.items import FAMILIES, flatten, generate
 
@@ -28,7 +29,12 @@ runner = CliRunner()
 
 
 def behavior_record(model: str, n_per_family: int, seed: int) -> dict:
-    """A behavior record whose stored per-item prompts genuinely reproduce from config."""
+    """A behavior record whose stored per-item prompts genuinely reproduce from config.
+
+    Carries flip-rate metrics: ``_flip_records_by_model`` must accept only records with
+    flip-rate metrics and per-item prompts, so the fixture has to look like the real
+    thing or the filter would rightly reject it.
+    """
     prompts = [item.prompt for item in flatten(generate(n_per_family=n_per_family, seed=seed))]
     return {
         "seed": seed,
@@ -41,6 +47,7 @@ def behavior_record(model: str, n_per_family: int, seed: int) -> dict:
                 max_samples=0, prompts=prompts,
             ),
         },
+        "metrics": {"n_pairs": len(prompts) // 2, "flip_rate": 0.0},
         "items": [{"prompt": p} for p in prompts],
     }
 
@@ -75,8 +82,15 @@ def fake_load_model(name: str) -> LoadedModel:
 
 
 def fake_collect_hidden_states(seen: list[str]):
-    """Record the prompts actually collected and return small deterministic activations."""
+    """Record the prompts actually collected and return small deterministic activations.
+
+    Honours ``max_samples`` exactly like the real ``collect_hidden_states``: a fake that
+    ignored the cap would pass even if the CLI delegated truncation to the collector and
+    then recorded the untruncated list — the record would lie about what was shown, and
+    the count/digest assertions below would not notice.
+    """
     def collect(loaded, prompts, batch_size: int = 8, max_samples: int = 512):
+        prompts = prompts[:max_samples]
         seen.extend(prompts)
         n = len(prompts)
         return {0: np.arange(n * 8, dtype=float).reshape(n, 8)}
@@ -129,10 +143,18 @@ def test_geosweep_skips_model_without_a_flip_record(tmp_path, monkeypatch):
 
 
 def test_geosweep_skips_flip_record_without_n_per_family(tmp_path, monkeypatch):
+    """A genuine flip-rate record (metrics + per-item prompts) whose config names no
+    n_per_family: a population can't be derived from it — refuse to guess."""
     results = tmp_path / "results"
     results.mkdir()
     (results / "E001-m3-seed0.json").write_text(
-        json.dumps({"seed": 0, "config": {"model": "m3"}, "items": []}), encoding="utf-8"
+        json.dumps({
+            "seed": 0,
+            "config": {"model": "m3"},
+            "metrics": {"flip_rate": 0.0},
+            "items": [{"prompt": "p"}],
+        }),
+        encoding="utf-8",
     )
     monkeypatch.setattr(cli, "RESULTS", results)
     calls: list[dict] = []
@@ -145,6 +167,41 @@ def test_geosweep_skips_flip_record_without_n_per_family(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert calls == []  # no derivable population — refuse to guess
     assert "no n_per_family" in result.output
+
+
+def test_geosweep_ignores_geometry_record_sorting_before_the_flip_record(
+    tmp_path, monkeypatch
+):
+    """`geometry --experiment E001` writes E001-geom-<model>.json — items=[], layer
+    metrics — and it sorts BEFORE E001-<model>-seed0.json. Selected as the behavior
+    record it would match geosweep against the geometry run's own population (rebuilding
+    the executed E001/E002 mismatch) and make `geom inputs` reject the pair. Only a
+    record with flip-rate metrics and per-item prompts may be matched against."""
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "E001-geom-m.json").write_text(
+        json.dumps(geometry_record("m", n_per_family=24, seed=0)), encoding="utf-8"
+    )
+    (results / "E001-m-seed2.json").write_text(
+        json.dumps(behavior_record("m", n_per_family=7, seed=2)), encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "RESULTS", results)
+
+    found = cli._flip_records_by_model()
+    assert set(found) == {"m"}
+    assert found["m"][0] == results / "E001-m-seed2.json"  # not the geometry record
+
+    calls: list[dict] = []
+
+    def recorder(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "geometry", recorder)
+    result = runner.invoke(cli.app, ["geosweep"])
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["n"] == 7  # the behavior record's population, not the geometry one
+    assert calls[0]["seed"] == 2
 
 
 def test_geosweep_skips_already_profiled_model(tmp_path, monkeypatch):
@@ -350,3 +407,36 @@ def test_inputs_with_no_geometry_records_fails(tmp_path, monkeypatch):
     result = runner.invoke(cli.app, ["inputs", "--experiment", "E002"])
     assert result.exit_code == 1
     assert "no geometry records matching" in result.output
+
+
+def test_inputs_does_not_claim_identical_when_a_population_failed_to_rebuild(
+    tmp_path, monkeypatch,
+):
+    """One verified-identical pair plus one geometry record with a tampered digest: the
+    green 'identical inputs' summary must require every population to have been rebuilt.
+    A skipped record verified nothing — printing green over it would certify a premise
+    nobody checked, which is exactly how the audit once lied while exiting nonzero."""
+    results = tmp_path / "results"
+    results.mkdir()
+    beh = behavior_record("m", n_per_family=2, seed=5)
+    (results / "E001-m-seed5.json").write_text(json.dumps(beh), encoding="utf-8")
+    good = {
+        "seed": 5,
+        "config": {"model": "m", "input_population": beh["config"]["input_population"]},
+        "items": [],
+    }
+    (results / "E002-geom-m.json").write_text(json.dumps(good), encoding="utf-8")
+    (results / "E002-geom-z.json").write_text(
+        json.dumps(geometry_record("z", n_per_family=2, seed=5, digest="0" * 16)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "RESULTS", results)
+
+    lax = runner.invoke(cli.app, ["inputs", "--experiment", "E002"])
+    assert lax.exit_code == 1  # a failed rebuild fails the audit even without --strict
+    assert "verification incomplete" in lax.output
+    assert "identical inputs" not in lax.output  # green requires all_rebuilt
+
+    strict = runner.invoke(cli.app, ["inputs", "--experiment", "E002", "--strict"])
+    assert strict.exit_code == 1
+    assert "verification incomplete" in strict.output

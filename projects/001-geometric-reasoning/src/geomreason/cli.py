@@ -31,16 +31,40 @@ console = Console()
 RESULTS = Path(__file__).resolve().parents[2] / "results"
 
 
+def _is_flip_record(record: dict) -> bool:
+    """True only for an actual behavior record: flip-rate metrics and per-item prompts.
+
+    A standalone ``geometry --experiment E001`` run writes ``E001-geom-<model>.json`` —
+    ``items=[]`` with layer metrics — which sorts *before* ``E001-<model>-seed0.json``.
+    Selected as the behavior record it would match geosweep against the geometry run's
+    own population (rebuilding exactly the E001/E002 mismatch) and make ``geom inputs``
+    reject the pair as unusable. Filter on what the record carries, not its filename.
+    """
+    items = record.get("items")
+    metrics = record.get("metrics")
+    return (
+        isinstance(items, list)
+        and bool(items)
+        and all(isinstance(item, dict) and "prompt" in item for item in items)
+        and isinstance(metrics, dict)
+        and "flip_rate" in metrics
+    )
+
+
 def _flip_records_by_model() -> dict[str, tuple[Path, dict]]:
     """First flip-rate record per model, in sorted path order.
 
     The record a geometry run must match: it carries the n_per_family and seed the
     matched population was drawn with. Sorted-path-first keeps this deterministic when
-    a model has several seed runs.
+    a model has several seed runs. Candidates are filtered to actual behavior records
+    (:func:`_is_flip_record`) — anything else in the glob is not a population a geometry
+    run can be matched against.
     """
     found: dict[str, tuple[Path, dict]] = {}
     for path in sorted(RESULTS.glob("E001*.json")):
         record = json.loads(path.read_text(encoding="utf-8"))
+        if not _is_flip_record(record):
+            continue
         model = record.get("config", {}).get("model")
         if model and model not in found:
             found[model] = (path, record)
@@ -521,13 +545,22 @@ def inputs(
 
     console.print()
     console.print(table)
-    if all_identical:
+    # Green requires more than "nothing compared unequal": a record skipped for an
+    # invalid digest or an unusable behavior record verified no population at all, and
+    # an "identical inputs" line over it would certify a premise nobody checked.
+    if all_identical and all_rebuilt:
         console.print("  [green]identical inputs[/green] — geometry ran on the flip-rate "
                       "prompts\n")
     else:
-        console.print("  [red]identical-input premise broken[/red] — geometry prompts "
-                      "differ from the flip-rate prompts; the shared overlap is "
-                      "family-attributed above\n")
+        if not all_rebuilt:
+            console.print(
+                "  [red]verification incomplete[/red] — some populations could not be "
+                "rebuilt from their records (above); a skipped record verifies nothing\n"
+            )
+        if not all_identical:
+            console.print("  [red]identical-input premise broken[/red] — geometry prompts "
+                          "differ from the flip-rate prompts; the shared overlap is "
+                          "family-attributed above\n")
     if not all_rebuilt or (strict and not all_identical):
         raise typer.Exit(1)
 
