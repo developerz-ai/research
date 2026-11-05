@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Is reasoning a property of internal geometry rather than scale? A falsification harness."
 requires-python = ">=3.11"
 dependencies = [
-    "torch==2.13.0",
+    "torch==2.14.1",
     "transformers>=4.44",
     "numpy>=1.26",
     "typer>=0.12",
