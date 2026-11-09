@@ -49,7 +49,10 @@ the working directory is inside that project. They own that project's source fil
 `lit-scout` and `corpus-reader` both write into `library/sources/`, but ownership there is
 **per file**: one agent per document, one note per document. Two scouts never touch the same
 slug. `library/corpus/INDEX.md` is the one shared file, so it has a single writer at a time —
-in a fan-out, readers report their row and the dispatcher runs `rx ingest` once at the end.
+in a fan-out, readers report their row's new status and the dispatcher applies it to the
+existing row as a separate manual edit. `rx ingest` does not do this: it only appends
+newly seen documents as `unread` rows and never rewrites an existing row, so status changes
+are a single-writer manual step, not an `rx` command.
 
 ## The distillation chain
 
