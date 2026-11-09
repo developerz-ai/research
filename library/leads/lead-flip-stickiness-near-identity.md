@@ -25,7 +25,7 @@ random across the rest:
 | SmolLM2-1.7B / Qwen2.5-7B / Qwen3.5-9B | — | — | 0.000 |
 
 Source: the findings table in `projects/001-geometric-reasoning/README.md`, computed from
-`results/E001*-seed0.json`. **These are sums taken from committed aggregates, not yet
+`projects/001-geometric-reasoning/results/E001*-seed0.json`. **These are sums taken from committed aggregates, not yet
 recomputed from per-item data** — see the first work item.
 
 `flip + sticky ≤ 1` is forced by the design (a sticky pair gives the same option on both
@@ -55,7 +55,7 @@ in the metric set.
 ## What it would take to kill it
 
 Recompute flip, stickiness, and the deficit **from the per-item arrays** in the committed
-`results/E001*-seed0.json` files, with a Wilson CI on the deficit at n=600 pairs. Then check
+`projects/001-geometric-reasoning/results/E001*-seed0.json` files, with a Wilson CI on the deficit at n=600 pairs. Then check
 whether the deficit is distinguishable from zero for the top models and whether SmolLM3-3B's
 0.058 survives its CI.
 
