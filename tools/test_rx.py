@@ -576,7 +576,6 @@ def test_bin_check_pins_the_tools_pytest() -> None:
 # The platform's setup template owns four files: the merge proof accepts only
 # the platform's own bytes for them, so this repo cannot pin what they run —
 # their drift belongs in the platform's template, in a separate pull request.
-# They are excluded from this scan, not forgotten.
 PLATFORM_OWNED_FILES = frozenset(
     {
         ".dz/maintainer/maintainer.yml",
@@ -585,6 +584,32 @@ PLATFORM_OWNED_FILES = frozenset(
         ".mcp.json",
     }
 )
+
+# They are not unchecked, though — they are scanned too, against this list. A
+# package spec that still floats in one of them is an open defect with a named
+# route; a spec that is NOT on this list fails the gate. Excluding those files
+# outright is what let .mcp.json launch an unpinned package with the
+# developer's SENTRY_ACCESS_TOKEN and DEVELOPERZ_API_KEY in scope, unnoticed.
+#
+# (file, spec) -> the route that fixes it. An entry the platform's template has
+# since pinned is stale: drop it.
+PLATFORM_OWNED_FLOATING_SPECS = {
+    (
+        ".dz/maintainer/reviewer.md",
+        "--with pytest",
+    ): (
+        "platform template: pin the gate's pytest — tools/test_rx.py runs "
+        "pytest==9.1.1"
+    ),
+    (
+        ".mcp.json",
+        "bunx @sentry/mcp-server",
+    ): (
+        "platform template: pin @sentry/mcp-server to an exact version — it "
+        "starts at every agent start with the developer's SENTRY_ACCESS_TOKEN "
+        "and DEVELOPERZ_API_KEY in scope"
+    ),
+}
 
 # Directories that hold no repo content: caches, venvs, the raw corpus, scratch.
 SCAN_SKIP_DIRS = frozenset(
@@ -611,8 +636,12 @@ REPO_ROOT = _RX_PATH.parent.parent
 _THIS_FILE = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
 
 
-def _repo_owned_text_files() -> list[tuple[str, str]]:
-    """Every (repo-relative path, text) this repo owns and can edit."""
+def _text_files(*, platform_owned: bool) -> list[tuple[str, str]]:
+    """Every (repo-relative path, text) this repo owns and can edit.
+
+    `platform_owned=False` — the repo's own files, the platform's excluded.
+    `platform_owned=True` — only the platform-owned files.
+    """
     found: list[tuple[str, str]] = []
     for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
         rel_dir = Path(dirpath).relative_to(REPO_ROOT).as_posix()
@@ -626,7 +655,9 @@ def _repo_owned_text_files() -> list[tuple[str, str]]:
         for name in sorted(filenames):
             path = Path(dirpath) / name
             rel = path.relative_to(REPO_ROOT).as_posix()
-            if rel in PLATFORM_OWNED_FILES or rel == _THIS_FILE:
+            if (rel in PLATFORM_OWNED_FILES) != platform_owned:
+                continue
+            if rel == _THIS_FILE:
                 continue
             if path.suffix not in SCAN_SUFFIXES and rel_dir not in SCAN_SCRIPT_DIRS:
                 continue
@@ -635,6 +666,11 @@ def _repo_owned_text_files() -> list[tuple[str, str]]:
             except (OSError, UnicodeDecodeError):
                 continue
     return found
+
+
+def _repo_owned_text_files() -> list[tuple[str, str]]:
+    """Every (repo-relative path, text) this repo owns and can edit."""
+    return _text_files(platform_owned=False)
 
 
 # `--with pytest` (no version) pulls whatever the index serves newest.
@@ -684,29 +720,57 @@ def _names_an_exact_version(spec: str) -> bool:
     return bool(re.search(r"@\d+(?:\.\d+)*", spec))
 
 
+def _floating_specs(rel: str, text: str) -> list[str]:
+    """Every package spec in `text` that its index resolves at run time."""
+    floating: list[str] = []
+    for match in _UNPINNED_WITH.finditer(text):
+        if not _names_an_exact_version(match.group(1)):
+            floating.append(f"--with {match.group(1)}")
+    for match in _UNPINNED_RUNNER.finditer(text):
+        if not _names_an_exact_version(match.group(2)):
+            floating.append(f"{match.group(1)} {match.group(2)}")
+    if rel.endswith(".json"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        for command, spec in _runner_package_specs(data):
+            if not _names_an_exact_version(spec):
+                floating.append(f"{command} {spec}")
+    return floating
+
+
 def test_no_repo_owned_file_resolves_a_package_at_latest() -> None:
     """No file this repo owns may resolve a package at its newest version.
 
     A floating spec runs whatever the index published when the command ran —
     with the developer's environment in scope. Pin it, or do not run it.
     """
-    offenders: list[str] = []
-    for rel, text in _repo_owned_text_files():
-        for match in _UNPINNED_WITH.finditer(text):
-            if not _names_an_exact_version(match.group(1)):
-                offenders.append(f"{rel}: --with {match.group(1)}")
-        for match in _UNPINNED_RUNNER.finditer(text):
-            if not _names_an_exact_version(match.group(2)):
-                offenders.append(f"{rel}: {match.group(1)} {match.group(2)}")
-        if rel.endswith(".json"):
-            try:
-                data = json.loads(text)
-            except ValueError:
-                data = None
-            for command, spec in _runner_package_specs(data):
-                if not _names_an_exact_version(spec):
-                    offenders.append(f"{rel}: {command} {spec}")
+    offenders = [
+        f"{rel}: {spec}"
+        for rel, text in _repo_owned_text_files()
+        for spec in _floating_specs(rel, text)
+    ]
     assert not offenders, "packages resolved at latest: " + "; ".join(offenders)
+
+
+def test_platform_owned_files_resolve_no_unrecorded_package_at_latest() -> None:
+    """The platform's own files may not carry an unrecorded floating spec.
+
+    The repo cannot pin what the platform's setup template writes, so the specs
+    that still float there are recorded in PLATFORM_OWNED_FLOATING_SPECS, each
+    with the route that fixes it. A spec that is not on that list is not a
+    recorded defect: it fails here.
+    """
+    offenders = [
+        f"{rel}: {spec}"
+        for rel, text in _text_files(platform_owned=True)
+        for spec in _floating_specs(rel, text)
+        if (rel, spec) not in PLATFORM_OWNED_FLOATING_SPECS
+    ]
+    assert not offenders, (
+        "packages resolved at latest in platform-owned files: " + "; ".join(offenders)
+    )
 
 
 def test_repo_owned_copies_of_the_gate_pytest_use_the_gates_pin() -> None:
