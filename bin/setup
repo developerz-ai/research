@@ -19,7 +19,7 @@ command -v mise >/dev/null && mise install
 # it: no dpkg or no sudo (Windows Git Bash, RHEL, no passwordless sudo) falls
 # through and assumes curl, ca-certificates and git are present already. The uv
 # install and the project syncs below must run on every platform either way.
-if command -v dpkg >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+if command -v dpkg >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   dpkg -s curl ca-certificates git >/dev/null 2>&1 || {
     sudo -n apt-get update
     sudo -n apt-get install -y --no-install-recommends curl ca-certificates git
@@ -30,7 +30,7 @@ fi
 # without this the .githooks/pre-commit gate stays inert in a fresh clone.
 git config core.hooksPath .githooks
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.13.7/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra dev --project projects/001-geometric-reasoning
 uv sync --extra dev --project projects/002-ftl-axiom-search

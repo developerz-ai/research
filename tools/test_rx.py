@@ -13,7 +13,9 @@ creation.
 The gate tests pin ``bin/check``'s contents: every ``projects/NNN-*`` directory
 keeps its ruff and pytest step, and the root tools env keeps an exact pytest pin
 — CI only sees the gate's exit code, so these are what stop it silently
-shrinking.
+shrinking. Two more run the gate itself with a stubbed ``uv``: its 75/1
+exit-code contract and the echoed success output get failing tests of their
+own.
 
 Run from the repo root:
 
@@ -24,8 +26,10 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
@@ -535,12 +539,101 @@ def test_bin_check_pins_the_tools_pytest() -> None:
     """`uv run --with pytest` resolves latest-at-run-time — that must not float.
 
     The gate's own runner is installed fresh on every CI run, so an exact pin is
-    what keeps a new pytest release from turning every unrelated change red.
+    what keeps a new pytest release from turning every unrelated change red —
+    and the pin must be a version the projects' locks actually record (the pin
+    follows the projects' lock), not any exact number someone typed in.
     """
     gate = GATE_SCRIPT.read_text(encoding="utf-8")
-    assert re.search(r"--with 'pytest==\d+\.\d+\.\d+'", gate), (
-        "bin/check runs an unpinned --with pytest"
+    match = re.search(r"--with 'pytest==(\d+\.\d+\.\d+)'", gate)
+    assert match, "bin/check runs an unpinned --with pytest"
+    locked = {
+        pkg["version"]
+        for lock in (_RX_PATH.parent.parent / "projects").glob("*/uv.lock")
+        for pkg in tomllib.loads(lock.read_text(encoding="utf-8")).get("package", [])
+        if pkg.get("name") == "pytest"
+    }
+    assert locked, "no projects/*/uv.lock records a pytest version for the gate to follow"
+    assert match.group(1) in locked, (
+        f"gate pin pytest=={match.group(1)} is recorded by no projects' uv.lock "
+        f"(locked pytest versions: {sorted(locked)})"
     )
+
+
+# ── bin/check's exit-code contract, run with a stubbed uv ──────────────────────
+
+# The 75/1 classification is a behavior of the script, not of its text: reverting
+# step() to a bare `&&` chain, or widening the network-phrase grep, leaves every
+# content-pinning test above green while misgrading failures. These tests run the
+# gate itself against a stub `uv` — every step starts with `uv run`, so one stub
+# scripts each scenario with no install and no network. The stub owns `$HOME`:
+# the gate prepends `$HOME/.local/bin` to PATH itself, so stubbing the inherited
+# PATH alone is shadowed by any real uv installed there.
+
+_STUB_UV = """\
+#!/usr/bin/env bash
+printf '%s\\n' "$STUB_UV_SAYS"
+exit "${STUB_UV_EXIT:-0}"
+"""
+
+needs_bash = pytest.mark.skipif(
+    shutil.which("bash") is None, reason="bin/check is a bash script"
+)
+
+
+def _run_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, says: str, exits: int
+) -> subprocess.CompletedProcess[str]:
+    stub_dir = tmp_path / "home" / ".local" / "bin"
+    _write(stub_dir / "uv", _STUB_UV).chmod(0o755)
+    monkeypatch.setenv("HOME", str(stub_dir.parent.parent))
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("STUB_UV_SAYS", says)
+    monkeypatch.setenv("STUB_UV_EXIT", str(exits))
+    # The gate cds to the repo root itself; the stub shadows only `uv`, so git,
+    # grep and the rest resolve normally and the hook-mode precondition holds.
+    return subprocess.run(
+        ["bash", str(GATE_SCRIPT)], capture_output=True, text=True, timeout=120
+    )
+
+
+@needs_bash
+def test_bin_check_exit_75_when_a_step_cannot_reach_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Index-unreachable output grades as the environment (75), never as red."""
+    proc = _run_gate(
+        tmp_path,
+        monkeypatch,
+        says="warning: failed to fetch https://pypi.org/simple/pip/",
+        exits=1,
+    )
+    assert proc.returncode == 75, proc.stderr
+    assert "could not reach the package index" in proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_1_on_a_plain_red_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure with no network phrase is a red change (1), not environment (75)."""
+    proc = _run_gate(
+        tmp_path, monkeypatch, says="ERROR: 2 failed, 42 passed in 0.31s", exits=1
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "the change is red" in proc.stderr
+
+
+@needs_bash
+def test_bin_check_echoes_step_output_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On success each step's captured output is echoed, so a proof is reproducible."""
+    proc = _run_gate(
+        tmp_path, monkeypatch, says="knowledge base clean (stubbed)", exits=0
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "knowledge base clean (stubbed)" in proc.stdout
+    assert proc.stderr.count("==> ") == 6
 
 
 # ── scaffolding: cmd_new_project renders a project that boots ─────────────────
