@@ -2,5 +2,35 @@
 # one-command setup — established by dz-runner setup mode. One command; adjust as the repo grows.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Load .env when it exists so the values reach everything setup and dev start.
+# uv run does not read .env on its own, and a script cannot export into the
+# shell that called it — .env.example has the one-liner for your own shell.
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 command -v mise >/dev/null && mise install
-(dpkg -s curl ca-certificates git >/dev/null 2>&1 || (sudo -n apt-get update && sudo -n apt-get install -y --no-install-recommends curl ca-certificates git)) && curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH="$HOME/.local/bin:$PATH" && uv sync --extra dev --project projects/001-geometric-reasoning && uv sync --extra dev --project projects/002-ftl-axiom-search
+
+# System packages are a Debian/Ubuntu concern, and only when this box can act on
+# it: no dpkg or no sudo (Windows Git Bash, RHEL, no passwordless sudo) falls
+# through and assumes curl, ca-certificates and git are present already. The uv
+# install and the project syncs below must run on every platform either way.
+if command -v dpkg >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+  dpkg -s curl ca-certificates git >/dev/null 2>&1 || {
+    sudo -n apt-get update
+    sudo -n apt-get install -y --no-install-recommends curl ca-certificates git
+  }
+fi
+
+# Activate the repo's pre-commit gate — git only reads .git/hooks by default, so
+# without this the .githooks/pre-commit gate stays inert in a fresh clone.
+git config core.hooksPath .githooks
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv sync --extra dev --project projects/001-geometric-reasoning
+uv sync --extra dev --project projects/002-ftl-axiom-search

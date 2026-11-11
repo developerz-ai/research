@@ -13,4 +13,4 @@ description: How the knowledge base is linted and each finding fixed. Use for rx
 7. Lead finding: `unscored axes` → score kill, novelty, discrimination and load; `marked promoted with no route recorded` → add a `## Route` section; `gated on ... but still open` → mark the lead dead.
 8. `run record missing 'seed' | 'git_sha' | 'config'` → the run is not a result: re-run it through the project's provenance writer.
 9. Dependency-update drift: a uv-managed project with no committed `uv.lock`, a Dependabot entry on another ecosystem, or a lock that no longer matches its manifest → `cd projects/NNN-slug && uv lock`, commit `uv.lock` beside the manifest, and keep the `.github/dependabot.yml` entry on ecosystem `uv` for that directory.
-10. Re-run `uv run tools/rx.py check` until it is clean, then `uv run --with pytest pytest tools/test_rx.py -q`.
+10. Re-run `uv run tools/rx.py check` until it is clean, then `uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q` — the pin follows the projects' lock; never let the gate's pytest float to latest.

@@ -6,13 +6,18 @@ configuration, and until now no test pinned it: deleting ``_check_dependency_upd
 and ``_lock_divergences`` outright would leave the suite green. These tests drive the
 validation against a synthetic tree so each failure mode is asserted separately.
 
-The scaffold tests at the end drive ``cmd_new_project`` against the real
-``templates/`` directory, so template drift fails here instead of at the next
-project's creation.
+The scaffold tests drive ``cmd_new_project`` against the real ``templates/``
+directory, so template drift fails here instead of at the next project's
+creation.
+
+The gate tests pin ``bin/check``'s contents: every ``projects/NNN-*`` directory
+keeps its ruff and pytest step, and the root tools env keeps an exact pytest pin
+— CI only sees the gate's exit code, so these are what stop it silently
+shrinking.
 
 Run from the repo root:
 
-    uv run --with pytest pytest tools/test_rx.py -q
+    uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q
 """
 
 from __future__ import annotations
@@ -486,6 +491,56 @@ def test_lock_divergences_compare_specifiers_not_just_names(tmp_path: Path) -> N
     lock = _write(tmp_path / "uv.lock", UV_LOCK.format(name="testpkg"))
     divergences = rx._lock_divergences(pyproject, lock)
     assert any("'numpy'" in d and "'>=2'" in d and "'>=1.26'" in d for d in divergences)
+
+
+# ── bin/check: the gate's contents are pinned, not just its exit code ───────
+
+GATE_SCRIPT = _RX_PATH.parent.parent / "bin" / "check"
+
+# Every projects/NNN-* directory must be gated by bin/check: CI only sees the
+# gate's exit code, so a project — or one half of its check — dropped from the
+# script would otherwise shrink the suite with CI staying green.
+GATED_PROJECTS = sorted(
+    p.name
+    for p in (_RX_PATH.parent.parent / "projects").iterdir()
+    if p.is_dir() and re.match(r"\d{3}-", p.name)
+)
+
+
+def _gate_steps_for(project: str, fragment: str) -> list[str]:
+    """Lines of bin/check that pair a project directory with a check fragment."""
+    gate = GATE_SCRIPT.read_text(encoding="utf-8")
+    return [ln for ln in gate.splitlines() if f"projects/{project}" in ln and fragment in ln]
+
+
+@pytest.mark.parametrize("project", GATED_PROJECTS)
+def test_bin_check_runs_ruff_for_every_project(project: str) -> None:
+    """Each project keeps its ruff step, reached only after its cd succeeds."""
+    lines = _gate_steps_for(project, "uv run --extra dev ruff check .")
+    assert lines, f"no ruff step for {project} in bin/check"
+    assert any("&&" in ln for ln in lines), (
+        f"the ruff step for {project} no longer requires its cd to succeed"
+    )
+
+
+@pytest.mark.parametrize("project", GATED_PROJECTS)
+def test_bin_check_runs_pytest_for_every_project(project: str) -> None:
+    """Each project keeps its pytest step."""
+    assert _gate_steps_for(project, "uv run --extra dev pytest -q"), (
+        f"no pytest step for {project} in bin/check"
+    )
+
+
+def test_bin_check_pins_the_tools_pytest() -> None:
+    """`uv run --with pytest` resolves latest-at-run-time — that must not float.
+
+    The gate's own runner is installed fresh on every CI run, so an exact pin is
+    what keeps a new pytest release from turning every unrelated change red.
+    """
+    gate = GATE_SCRIPT.read_text(encoding="utf-8")
+    assert re.search(r"--with 'pytest==\d+\.\d+\.\d+'", gate), (
+        "bin/check runs an unpinned --with pytest"
+    )
 
 
 # ── scaffolding: cmd_new_project renders a project that boots ─────────────────

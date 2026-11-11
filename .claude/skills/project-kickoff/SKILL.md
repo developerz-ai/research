@@ -13,3 +13,4 @@ description: How a new project is scaffolded and made runnable. Use for rx new-p
 6. `uv run <slug> smoke` → under 60s, CPU end-to-end wiring check; run it after every change.
 7. `uv run pytest -q` → the scaffold test; `uv run ruff check --fix .` for lint. Do not run `ruff format .` as a gate — the tree is not format-clean.
 8. Write the project's `CLAUDE.md` start-here and claim sections, then preregister the first experiment before any measurement code: the first experiment's job is to kill the claim cheaply, under an hour, on CPU if possible.
+9. Add the project to the gate: `bin/check` runs every `projects/NNN-*` directory's ruff + pytest steps, and `tools/test_rx.py` fails a project that has none.

@@ -1,5 +1,58 @@
 #!/usr/bin/env bash
-# one-command check (typecheck + lint + test) — established by dz-runner setup mode. One command; adjust as the repo grows.
+# one-command check (repo check + lint + test) — established by dz-runner setup
+# mode. One command; adjust as the repo grows.
+#
+# Exit codes (contract: .claude/skills/verify-change/SKILL.md):
+#   0 — every check passed; commit it.
+#   75 — the gate's own environment is unusable (uv/git missing, package index
+#       unreachable): it refused to grade. Blame the environment, never the change.
+#   1 — the gate ran and the change is red.
+#   79 stays reserved for a gate that grades a subset and defers the rest; this
+#   gate runs everything it defines, so it never emits 79.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export PATH="$HOME/.local/bin:$PATH" && uv run tools/rx.py check && uv run --with pytest pytest tools/test_rx.py -q && (cd projects/001-geometric-reasoning && uv run --extra dev ruff check . && uv run --extra dev pytest -q) && (cd projects/002-ftl-axiom-search && uv run --extra dev ruff check . && uv run --extra dev pytest -q)
+export PATH="$HOME/.local/bin:$PATH"
+
+die_env() { echo "bin/check: $1" >&2; exit 75; }
+die_red() { echo "bin/check: $1" >&2; exit 1; }
+
+command -v uv >/dev/null 2>&1 ||
+  die_env "uv not found on PATH — run bin/setup first; this is the environment, not the change"
+command -v git >/dev/null 2>&1 || die_env "git not found on PATH"
+
+# step <label> <cmd...>: run one gate step with its output captured, then
+# classify a failure as the environment (75 — the index/network was unreachable)
+# or as a red change (1). A bare `&&` chain could only ever return the failing
+# command's status, so an environment break used to grade as a red change.
+step() {
+  local label=$1 out='' status=0
+  shift
+  printf '==> %s\n' "$label" >&2
+  out=$("$@" 2>&1) || status=$?
+  if [ "$status" -eq 0 ]; then
+    return 0
+  fi
+  if grep -Eqi 'failed to (fetch|download)|caused by.*(timed out|connection|network)|temporary failure in name resolution|name or service not known' <<<"$out"; then
+    die_env "$label could not reach the package index (exit $status)"
+  fi
+  printf 'bin/check: step failed: %s (exit %s)\n' "$label" "$status" >&2
+  printf '%s\n' "$out" | tail -n 40 >&2
+  die_red "the change is red"
+}
+
+# The pre-commit hook runs this same script, so it guards anything only if git
+# records it executable — a 100644 hook is silently skipped while CI stays
+# green. Asserted here because CI runs bin/check, not the hook itself.
+hook_mode=$(git ls-files -s -- .githooks/pre-commit | awk '{print $1}')
+[ "$hook_mode" = "100755" ] ||
+  die_red ".githooks/pre-commit is mode '$hook_mode' in git (want 100755) — fix: chmod +x .githooks/pre-commit && git add .githooks/pre-commit"
+
+# The gate's contents are machine-checked by tools/test_rx.py (test_bin_check_*):
+# dropping a project's ruff or pytest step fails that suite, not just CI. The
+# tools pytest pin matches the projects' lock — never latest-at-run-time.
+step "rx knowledge base" uv run tools/rx.py check
+step "tools tests" uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q
+step "001 ruff" bash -c "cd 'projects/001-geometric-reasoning' && uv run --extra dev ruff check ."
+step "001 pytest" bash -c "cd 'projects/001-geometric-reasoning' && uv run --extra dev pytest -q"
+step "002 ruff" bash -c "cd 'projects/002-ftl-axiom-search' && uv run --extra dev ruff check ."
+step "002 pytest" bash -c "cd 'projects/002-ftl-axiom-search' && uv run --extra dev pytest -q"

@@ -25,10 +25,13 @@ $ARGUMENTS
 3. Explore read-only, in parallel, into a ranked worklist of PR-sized batches.
 4. Build primitive-first: one reusable primitive with its first real caller. No
    abstraction before a consumer.
-5. **Prove it.** `bin/setup` after any dependency change, then `bin/check`, which here is
-   `export PATH="$HOME/.local/bin:$PATH" && uv run tools/rx.py check && uv run --with pytest pytest tools/test_rx.py -q && (cd projects/001-geometric-reasoning && uv run --extra dev ruff check . && uv run --extra dev pytest -q) && (cd projects/002-ftl-axiom-search && uv run --extra dev ruff check . && uv run --extra dev pytest -q)`.
-   Red is not a pull request: fix the cause, never silence the gate. Add the failing test
-   first — a green run that never went red proves nothing.
+5. **Prove it.** `bin/setup` after any dependency change, then `bin/check` — the
+   knowledge-base check, the tools tests (pytest pinned to the projects' lock, never
+   latest), then every project's ruff + pytest, one step per tool, so an environment
+   failure (package index unreachable) exits 75 and only a red change exits 1.
+   Details: `.claude/skills/verify-change/SKILL.md`. Red is not a pull request: fix
+   the cause, never silence the gate. Add the failing test first — a green run that
+   never went red proves nothing.
 6. **One pull request in flight, start to finish.** Open it, watch it to merged, run
    `git fetch`, and only then start the next. Each merge rebases the base under the
    other, and green-when-opened is not green-to-merge.

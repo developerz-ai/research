@@ -14,5 +14,5 @@ description: How a claim and its preregistered experiment are written here. Use 
    - `git_sha` is `unknown` → git is missing or this is not a repo: install git and re-run.
 6. Run ≥3 seeds before believing a spread, then aggregate with the project's own commands (`uv run geom grid` reconciles the 24-cell depth grid; `uv run ftl falsify` compares fan-out against a single agent). There is no generic report command.
 7. Write the Verdict section in the same experiment doc: claim status in the regime tested, what changed in beliefs, what it cannot conclude, which notes changed evidence class. Amend the preregistration only in the amendment log, with the reason.
-8. Gate the change: `uv run tools/rx.py check` must print `knowledge base clean`, then `uv run --with pytest pytest tools/test_rx.py -q`.
+8. Gate the change: `uv run tools/rx.py check` must print `knowledge base clean`, then `uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q` — pinned, like the projects' lock.
    - `check` reports a missing `uv.lock` → `cd projects/NNN-slug && uv lock` and commit it beside the manifest.
