@@ -16,7 +16,7 @@ passes it locally passes everywhere.
 |------|---------|------------|
 | install | `bin/setup` | bash. Debian/Ubuntu: apt-installs missing curl, ca-certificates, git (needs passwordless sudo). Windows Git Bash, RHEL or a box without sudo: that step is skipped — those tools must already be present. Everywhere: loads `.env`, activates `.githooks` via `git config core.hooksPath`, installs uv, syncs both project venvs |
 | run | `bin/dev` | loads `.env`, then `uv run tools/rx.py doctor`, `projects`, `leads`, and each project's `<slug> doctor` — on developerz.ai runs, start it with code_bash_background when you need a running stack |
-| prove | `bin/check` | `uv run tools/rx.py check` → the tools tests (pytest pinned to the projects' lock, not latest) → each project's ruff + pytest, one step per tool, every failure classified: environment (index unreachable) exits 75, a red change exits 1 |
+| prove | `bin/check` | `uv run tools/rx.py check` → the tools tests (`uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q` — pinned to the projects' lock, not latest) → each project's ruff + pytest, one step per tool, every failure classified: environment (index unreachable) exits 75, a red change exits 1 |
 | stop | `bin/stop` | true — on developerz.ai runs, the platform runs this when your session ends — do not stop the stack yourself |
 
 ## Rules

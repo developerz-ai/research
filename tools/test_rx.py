@@ -17,6 +17,12 @@ shrinking. Two more run the gate itself with a stubbed ``uv``: its 75/1
 exit-code contract and the echoed success output get failing tests of their
 own.
 
+The package-resolution tests cover the repo's own surface: no file this repo
+owns may resolve a package at its newest version, and every copy of the gate's
+pytest command must name the gate's own pin. A copy is what runs when a
+reviewer copies it, so a floating or drifting copy is the defect, not the
+original.
+
 Run from the repo root:
 
     uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q
@@ -26,6 +32,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -556,6 +563,172 @@ def test_bin_check_pins_the_tools_pytest() -> None:
     assert match.group(1) in locked, (
         f"gate pin pytest=={match.group(1)} is recorded by no projects' uv.lock "
         f"(locked pytest versions: {sorted(locked)})"
+    )
+
+
+# ── package resolution: nothing this repo owns may resolve a package at latest ─
+
+# A package spec without a version is resolved by its index at run time: the
+# newest publish, every time, with the developer's environment in scope. The
+# gate's pytest is pinned above; the copies of that command — the skills, the
+# commands, the docs a reviewer copies from — have to be pinned too.
+#
+# The platform's setup template owns four files: the merge proof accepts only
+# the platform's own bytes for them, so this repo cannot pin what they run —
+# their drift belongs in the platform's template, in a separate pull request.
+# They are excluded from this scan, not forgotten.
+PLATFORM_OWNED_FILES = frozenset(
+    {
+        ".dz/maintainer/maintainer.yml",
+        ".dz/maintainer/reviewer.md",
+        ".github/workflows/ci.yml",
+        ".mcp.json",
+    }
+)
+
+# Directories that hold no repo content: caches, venvs, the raw corpus, scratch.
+SCAN_SKIP_DIRS = frozenset(
+    {
+        ".codegraph",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "venv",
+    }
+)
+SCAN_SKIP_PATHS = frozenset({"library/corpus", "tmp"})
+SCAN_SUFFIXES = frozenset(
+    {".cfg", ".ini", ".json", ".md", ".sh", ".toml", ".txt", ".yaml", ".yml"}
+)
+# Extensionless files: the repo's own scripts.
+SCAN_SCRIPT_DIRS = frozenset({".githooks", "bin"})
+
+REPO_ROOT = _RX_PATH.parent.parent
+_THIS_FILE = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
+
+
+def _repo_owned_text_files() -> list[tuple[str, str]]:
+    """Every (repo-relative path, text) this repo owns and can edit."""
+    found: list[tuple[str, str]] = []
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        rel_dir = Path(dirpath).relative_to(REPO_ROOT).as_posix()
+        keep = []
+        for name in dirnames:
+            child = name if rel_dir == "." else f"{rel_dir}/{name}"
+            if name in SCAN_SKIP_DIRS or child in SCAN_SKIP_PATHS:
+                continue
+            keep.append(name)
+        dirnames[:] = sorted(keep)
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel in PLATFORM_OWNED_FILES or rel == _THIS_FILE:
+                continue
+            if path.suffix not in SCAN_SUFFIXES and rel_dir not in SCAN_SCRIPT_DIRS:
+                continue
+            try:
+                found.append((rel, path.read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+    return found
+
+
+# `--with pytest` (no version) pulls whatever the index serves newest.
+_UNPINNED_WITH = re.compile(r"--with[ \t]+['\"]?([A-Za-z0-9_.\-=]+)")
+# npx / bunx / uvx run the newest publish of the package they are handed.
+_UNPINNED_RUNNER = re.compile(r"\b(npx|bunx|uvx)[ \t]+([@A-Za-z0-9_.\-/]+)")
+
+# A server config names its runner in "command" and the package in "args", so
+# the pair has to be read as a pair: "bunx" alone says nothing, "bunx
+# @sentry/mcp-server" says the newest publish runs with the caller's secrets.
+PACKAGE_RUNNERS = frozenset({"bunx", "dlx", "npx", "pnpx", "uvx"})
+EXEC_COMMANDS = frozenset({"dlx", "exec"})
+
+
+def _runner_package_specs(data: object) -> list[tuple[str, str]]:
+    """(command, package spec) of every config entry that runs a package."""
+    specs: list[tuple[str, str]] = []
+    if isinstance(data, dict):
+        command = data.get("command")
+        args = data.get("args")
+        if isinstance(command, str) and isinstance(args, list):
+            positional = [
+                a for a in args if isinstance(a, str) and not a.startswith("-")
+            ]
+            name = Path(command).name
+            if name in PACKAGE_RUNNERS and positional:
+                specs.append((command, positional[0]))
+            elif (
+                name in {"npm", "pnpm", "yarn"}
+                and positional
+                and positional[0] in EXEC_COMMANDS
+                and len(positional) > 1
+            ):
+                specs.append((command, positional[1]))
+        for value in data.values():
+            specs.extend(_runner_package_specs(value))
+    elif isinstance(data, list):
+        for value in data:
+            specs.extend(_runner_package_specs(value))
+    return specs
+
+
+def _names_an_exact_version(spec: str) -> bool:
+    """True when a package spec pins an exact version (``==`` or ``@``)."""
+    if "==" in spec:
+        return True
+    return bool(re.search(r"@\d+(?:\.\d+)*", spec))
+
+
+def test_no_repo_owned_file_resolves_a_package_at_latest() -> None:
+    """No file this repo owns may resolve a package at its newest version.
+
+    A floating spec runs whatever the index published when the command ran —
+    with the developer's environment in scope. Pin it, or do not run it.
+    """
+    offenders: list[str] = []
+    for rel, text in _repo_owned_text_files():
+        for match in _UNPINNED_WITH.finditer(text):
+            if not _names_an_exact_version(match.group(1)):
+                offenders.append(f"{rel}: --with {match.group(1)}")
+        for match in _UNPINNED_RUNNER.finditer(text):
+            if not _names_an_exact_version(match.group(2)):
+                offenders.append(f"{rel}: {match.group(1)} {match.group(2)}")
+        if rel.endswith(".json"):
+            try:
+                data = json.loads(text)
+            except ValueError:
+                data = None
+            for command, spec in _runner_package_specs(data):
+                if not _names_an_exact_version(spec):
+                    offenders.append(f"{rel}: {command} {spec}")
+    assert not offenders, "packages resolved at latest: " + "; ".join(offenders)
+
+
+def test_repo_owned_copies_of_the_gate_pytest_use_the_gates_pin() -> None:
+    """A copy of the gate's tools-pytest command must name the gate's pin.
+
+    The gate runs one pytest version; a doc that tells a reviewer to run
+    another is not the gate, and a copy that floats is worse — it resolves the
+    newest release at run time.
+    """
+    gate = GATE_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r"--with 'pytest==(\d+\.\d+\.\d+)'", gate)
+    assert match, "bin/check runs an unpinned --with pytest"
+    gate_pin = match.group(1)
+    offenders = [
+        f"{rel}: pytest=={quoted}"
+        for rel, text in _repo_owned_text_files()
+        for quoted in re.findall(r"--with[ \t]+['\"]?pytest==([\d.]+)", text)
+        if quoted != gate_pin
+    ]
+    assert not offenders, (
+        f"copies of the gate's pytest pin disagree with bin/check's {gate_pin}: "
+        + "; ".join(offenders)
     )
 
 
