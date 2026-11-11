@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# one-command check (typecheck + lint + test) — established by dz-runner setup mode. One command; adjust as the repo grows.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export PATH="$HOME/.local/bin:$PATH" && uv run tools/rx.py check && uv run --with pytest pytest tools/test_rx.py -q && (cd projects/001-geometric-reasoning && uv run --extra dev ruff check . && uv run --extra dev pytest -q) && (cd projects/002-ftl-axiom-search && uv run --extra dev ruff check . && uv run --extra dev pytest -q)
