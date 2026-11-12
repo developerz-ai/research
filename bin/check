@@ -2,6 +2,11 @@
 # one-command check (repo check + lint + test) — established by dz-runner setup
 # mode. One command; adjust as the repo grows.
 #
+# The canonical check is `uv run tools/rx.py check` — the knowledge-base lint
+# then the repo's test suites — and it is the FIRST step here, so there is one
+# implementation of "is this tree green?" behind one canonical command; this
+# gate adds the pinned tools suite and each project's ruff and pytest after it.
+#
 # Exit codes (contract: .claude/skills/verify-change/SKILL.md):
 #   0 — every check passed; commit it.
 #   75 — the gate's own environment is unusable (uv/git missing, package index
