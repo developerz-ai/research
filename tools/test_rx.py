@@ -616,7 +616,9 @@ PLATFORM_OWNED_FLOATING_SPECS = {
     ): {
         "owner": "the platform's setup template",
         "route": (
-            "pin @sentry/mcp-server to an exact version — it starts at every "
+            "pin @sentry/mcp-server to an exact version in .mcp.json's args — "
+            "0.49.0 was the registry's latest on 2026-11-12, re-check "
+            "registry.npmjs.org/@sentry/mcp-server/latest — it starts at every "
             "agent start with the developer's SENTRY_ACCESS_TOKEN and "
             "DEVELOPERZ_API_KEY in scope"
         ),
@@ -710,36 +712,97 @@ def _repo_owned_text_files() -> list[tuple[str, str]]:
 
 # `--with pytest` (no version) pulls whatever the index serves newest.
 _UNPINNED_WITH = re.compile(r"--with[ \t]+['\"]?([A-Za-z0-9_.\-=]+)")
-# npx / bunx / uvx run the newest publish of the package they are handed.
-_UNPINNED_RUNNER = re.compile(r"\b(npx|bunx|uvx)[ \t]+([@A-Za-z0-9_.\-/]+)")
+
+# A runner executes the package it is handed and the index decides which
+# publish that is. The move hides behind several names: `bun x` is `bunx`,
+# `pnpm dlx` and `npm exec` are npx under another word, `uvx --from pkg tool`
+# names the package in a flag, and `uv tool run pkg` is uvx spelled out. A
+# flag may also sit between the runner and the package (`bunx --bun pkg`), and
+# the package may carry a comparator (`uvx pkg==1.2.3`). Reading only
+# "npx | bunx | uvx" leaves the class an open door: the next file to use
+# another spelling runs an unpinned publish again and this gate says nothing.
+_RUNNER_PATTERNS = (
+    re.compile(r"\b(?:bunx|bun[ \t]+x|npx|pnpx|uvx)\b"),
+    re.compile(r"\b(?:pnpm|npm|yarn)[ \t]+(?:dlx|exec)\b"),
+    re.compile(r"\buv[ \t]+tool[ \t]+(?:run|install)\b"),
+)
+# Flags whose value IS the package: `uvx --from ruff==0.1.0 ruff`.
+_PACKAGE_FLAGS = frozenset({"--from", "--package", "--pkg"})
+# Punctuation prose leaves around a command: quotes, backticks, brackets.
+_PROSE_PUNCTUATION = "\"'`(),.;"
+# What a package spec looks like on a command line: an npm name — scoped or
+# not — with an optional version or version range and an optional comparator.
+_PACKAGE_TOKEN = re.compile(
+    r"^(?:@[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+|[A-Za-z0-9][A-Za-z0-9_.\-]*)"
+    r"(?:@[^\s]+)?(?:[<>=!~][^\s]+)?$"
+)
 
 # A server config names its runner in "command" and the package in "args", so
 # the pair has to be read as a pair: "bunx" alone says nothing, "bunx
 # @sentry/mcp-server" says the newest publish runs with the caller's secrets.
 PACKAGE_RUNNERS = frozenset({"bunx", "dlx", "npx", "pnpx", "uvx"})
 EXEC_COMMANDS = frozenset({"dlx", "exec"})
+# `bun x pkg` is `bunx pkg` — the same runner under its long spelling.
+BUN_LONG_FORM = "x"
+# `npm exec pkg`, `pnpm dlx pkg`, `yarn dlx pkg`: the runner is the manager.
+NPM_MANAGERS = frozenset({"npm", "pnpm", "yarn"})
+
+
+def _package_token(word: str) -> str | None:
+    """The package spec in `word`, or None when it names no package."""
+    word = word.strip(_PROSE_PUNCTUATION)
+    return word if _PACKAGE_TOKEN.match(word) else None
+
+
+def _package_after_words(words: list[str], start: int) -> str | None:
+    """The package the words from `start` on name, or None.
+
+    Flags are skipped — except the ones whose value IS the package
+    (`uvx --from pkg tool`). A word that is only punctuation the prose left
+    around the runner is skipped too; the first real word that names no
+    package ends the scan, so a config's own keys are never read as one.
+    """
+    index = start
+    while index < len(words):
+        word = words[index].strip(_PROSE_PUNCTUATION)
+        if not word:
+            index += 1
+            continue
+        if word.startswith("-"):
+            if word in _PACKAGE_FLAGS and index + 1 < len(words):
+                return _package_token(words[index + 1])
+            index += 1
+            continue
+        return _package_token(word)
+    return None
 
 
 def _runner_package_specs(data: object) -> list[tuple[str, str]]:
-    """(command, package spec) of every config entry that runs a package."""
+    """(runner, package spec) of every config entry that runs a package."""
     specs: list[tuple[str, str]] = []
     if isinstance(data, dict):
         command = data.get("command")
         args = data.get("args")
         if isinstance(command, str) and isinstance(args, list):
-            positional = [
-                a for a in args if isinstance(a, str) and not a.startswith("-")
-            ]
+            words = [a for a in args if isinstance(a, str)]
             name = Path(command).name
-            if name in PACKAGE_RUNNERS and positional:
-                specs.append((command, positional[0]))
+            if name in PACKAGE_RUNNERS:
+                package = _package_after_words(words, 0)
+                runner = name
+            elif name == "bun" and words[:1] == [BUN_LONG_FORM]:
+                package = _package_after_words(words, 1)
+                runner = f"bun {BUN_LONG_FORM}"
             elif (
-                name in {"npm", "pnpm", "yarn"}
-                and positional
-                and positional[0] in EXEC_COMMANDS
-                and len(positional) > 1
+                name in NPM_MANAGERS
+                and words[:1]
+                and words[0] in EXEC_COMMANDS
             ):
-                specs.append((command, positional[1]))
+                package = _package_after_words(words, 1)
+                runner = f"{name} {words[0]}"
+            else:
+                package, runner = None, name
+            if package:
+                specs.append((runner, package))
         for value in data.values():
             specs.extend(_runner_package_specs(value))
     elif isinstance(data, list):
@@ -748,11 +811,27 @@ def _runner_package_specs(data: object) -> list[tuple[str, str]]:
     return specs
 
 
+def _text_package_specs(text: str) -> list[tuple[str, str]]:
+    """(runner, package spec) of every package a runner in `text` executes."""
+    specs: list[tuple[str, str]] = []
+    for pattern in _RUNNER_PATTERNS:
+        for match in pattern.finditer(text):
+            line = text[match.end():].split("\n", 1)[0]
+            package = _package_after_words(line.split(), 0)
+            if package:
+                specs.append((" ".join(match.group(0).split()), package))
+    return specs
+
+
+# An exact version: `pkg==1.2.3` (PEP 440) or `pkg@1.2.3` (npm). A range —
+# `pkg@1.x`, `pkg@^1.2.3`, `pkg>=1.0` — is not a pin: the index still serves
+# the newest publish that matches it.
+_EXACT_VERSION = re.compile(r"(?:==|@)\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.\-]+)?$")
+
+
 def _names_an_exact_version(spec: str) -> bool:
     """True when a package spec pins an exact version (``==`` or ``@``)."""
-    if "==" in spec:
-        return True
-    return bool(re.search(r"@\d+(?:\.\d+)*", spec))
+    return bool(_EXACT_VERSION.search(spec))
 
 
 def _floating_specs(rel: str, text: str) -> list[str]:
@@ -761,18 +840,109 @@ def _floating_specs(rel: str, text: str) -> list[str]:
     for match in _UNPINNED_WITH.finditer(text):
         if not _names_an_exact_version(match.group(1)):
             floating.append(f"--with {match.group(1)}")
-    for match in _UNPINNED_RUNNER.finditer(text):
-        if not _names_an_exact_version(match.group(2)):
-            floating.append(f"{match.group(1)} {match.group(2)}")
+    for runner, package in _text_package_specs(text):
+        if not _names_an_exact_version(package):
+            floating.append(f"{runner} {package}")
     if rel.endswith(".json"):
         try:
             data = json.loads(text)
         except ValueError:
             data = None
-        for command, spec in _runner_package_specs(data):
-            if not _names_an_exact_version(spec):
-                floating.append(f"{command} {spec}")
+        for runner, package in _runner_package_specs(data):
+            if not _names_an_exact_version(package):
+                floating.append(f"{runner} {package}")
     return floating
+
+
+# ── the guard for the class, tested where the class is detected ──────────────
+#
+# The gates below are only as good as the detection under them. A regex that
+# stops reading one spelling of "run the newest publish" opens the door again,
+# and nothing else in this suite would notice: the gate would go on reporting
+# "clean" while a file ran an unpinned package with the caller's secrets in
+# scope. These tests pin the spellings, so a future edit to the detection
+# cannot quietly narrow it.
+
+
+_RUNNER_FORMS = [
+    "bunx @sentry/mcp-server",
+    "bun x @sentry/mcp-server",
+    "npx @sentry/mcp-server",
+    "pnpx @sentry/mcp-server",
+    "uvx @sentry/mcp-server",
+    "pnpm dlx @sentry/mcp-server",
+    "npm exec @sentry/mcp-server",
+    "yarn dlx @sentry/mcp-server",
+    "uv tool run @sentry/mcp-server",
+    "bunx --bun @sentry/mcp-server",
+    "uvx --from @sentry/mcp-server tool",
+]
+
+
+@pytest.mark.parametrize("form", _RUNNER_FORMS)
+def test_every_runner_spelling_is_read_as_a_floating_package(form: str) -> None:
+    """Each way of running a package at run time is caught, not just npx/bunx."""
+    assert _floating_specs("notes.md", form), form
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "bunx @sentry/mcp-server@0.49.0",
+        "bun x @sentry/mcp-server@0.49.0",
+        "npx @sentry/mcp-server@0.49.0",
+        "uvx @sentry/mcp-server==0.49.0",
+        "bunx --bun @sentry/mcp-server@0.49.0",
+        "uvx --from @sentry/mcp-server==0.49.0 tool",
+    ],
+)
+def test_a_pinned_package_is_not_reported_as_floating(form: str) -> None:
+    """A spec with an exact version is a pin — the gate must not cry wolf."""
+    assert not _floating_specs("notes.md", form), form
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "@sentry/mcp-server@1.x",
+        "@sentry/mcp-server@^1.2.3",
+        "@sentry/mcp-server@latest",
+        "@sentry/mcp-server>=1.0",
+        "@sentry/mcp-server==1.x",
+    ],
+)
+def test_a_version_range_is_not_an_exact_version(spec: str) -> None:
+    """A range still resolves at run time: the index serves the newest match."""
+    assert not _names_an_exact_version(spec), spec
+    assert _floating_specs("notes.md", f"bunx {spec}"), spec
+
+
+@pytest.mark.parametrize(
+    "command,args",
+    [
+        ("bunx", ["@sentry/mcp-server"]),
+        ("bun", ["x", "@sentry/mcp-server"]),
+        ("bunx", ["--bun", "@sentry/mcp-server"]),
+        ("npm", ["exec", "@sentry/mcp-server"]),
+        ("pnpm", ["dlx", "@sentry/mcp-server"]),
+    ],
+)
+def test_a_server_config_is_read_as_running_a_package(
+    command: str, args: list[str]
+) -> None:
+    """A config names its runner in "command" and its package in "args"."""
+    config = {"mcpServers": {"sentry-mcp": {"command": command, "args": args}}}
+    assert _floating_specs("mcp.json", json.dumps(config)), (command, args)
+
+
+def test_a_pinned_server_config_is_not_reported_as_floating() -> None:
+    """The config path reads a pin as a pin too."""
+    config = {
+        "mcpServers": {
+            "sentry-mcp": {"command": "bunx", "args": ["@sentry/mcp-server@0.49.0"]}
+        }
+    }
+    assert not _floating_specs("mcp.json", json.dumps(config))
 
 
 def test_no_repo_owned_file_resolves_a_package_at_latest() -> None:
