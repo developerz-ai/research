@@ -1202,18 +1202,52 @@ needs_bash = pytest.mark.skipif(
 
 
 def _run_gate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, says: str, exits: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    says: str = "",
+    exits: int = 0,
+    stubs: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     stub_dir = tmp_path / "home" / ".local" / "bin"
     _write(stub_dir / "uv", _STUB_UV).chmod(0o755)
+    for name, body in (stubs or {}).items():
+        _write(stub_dir / name, body).chmod(0o755)
     monkeypatch.setenv("HOME", str(stub_dir.parent.parent))
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("STUB_UV_SAYS", says)
     monkeypatch.setenv("STUB_UV_EXIT", str(exits))
-    # The gate cds to the repo root itself; the stub shadows only `uv`, so git,
-    # grep and the rest resolve normally and the hook-mode precondition holds.
+    # The gate cds to the repo root itself; the stub shadows only `uv` (plus any
+    # named `stubs`), so git, grep and the rest resolve normally and the
+    # hook-mode precondition holds unless a test stubs git to break it.
     return subprocess.run(
-        ["bash", str(GATE_SCRIPT)], capture_output=True, text=True, timeout=120
+        [shutil.which("bash") or "bash", str(GATE_SCRIPT)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def _run_gate_with_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tools: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run the gate with a PATH holding only `tools` (name -> script body) and
+    `dirname`, which the gate needs to cd before its tool preconditions."""
+    # Resolved before PATH is narrowed below.
+    bash = shutil.which("bash")
+    assert bash
+    bin_dir = tmp_path / "only-bin"
+    bin_dir.mkdir()
+    dirname = shutil.which("dirname")
+    assert dirname, "dirname is needed to run bin/check"
+    (bin_dir / "dirname").symlink_to(dirname)
+    for name, body in tools.items():
+        _write(bin_dir / name, body).chmod(0o755)
+    # An empty HOME: the gate prepends $HOME/.local/bin, where a real uv lives.
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    monkeypatch.setenv("PATH", str(bin_dir))
+    return subprocess.run(
+        [bash, str(GATE_SCRIPT)], capture_output=True, text=True, timeout=120
     )
 
 
@@ -1254,7 +1288,50 @@ def test_bin_check_echoes_step_output_on_success(
     )
     assert proc.returncode == 0, proc.stderr
     assert "knowledge base clean (stubbed)" in proc.stdout
-    assert proc.stderr.count("==> ") == 6
+    # Derived from the projects on disk, not today's step count: two repo-wide
+    # steps, then one ruff and one pytest step per gated project.
+    expected = ["rx knowledge base", "tools tests"] + [
+        f"{project[:3]} {check}" for project in GATED_PROJECTS for check in ("ruff", "pytest")
+    ]
+    ran = [ln[len("==> ") :] for ln in proc.stderr.splitlines() if ln.startswith("==> ")]
+    assert ran == expected, proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_75_when_uv_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No uv on PATH is the environment (75): the gate refuses to grade."""
+    proc = _run_gate_with_only(tmp_path, monkeypatch, {"git": "#!/bin/sh\nexit 0\n"})
+    assert proc.returncode == 75, proc.stderr
+    assert "uv not found on PATH" in proc.stderr
+    assert "==> " not in proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_75_when_git_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No git on PATH is the environment (75), not a red change."""
+    proc = _run_gate_with_only(tmp_path, monkeypatch, {"uv": _STUB_UV})
+    assert proc.returncode == 75, proc.stderr
+    assert "git not found on PATH" in proc.stderr
+    assert "==> " not in proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_1_when_the_hook_is_not_executable_in_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hook git records as 100644 is silently skipped: the gate grades it red (1)."""
+    stub_git = (
+        "#!/usr/bin/env bash\n"
+        "printf '100644 0000000000000000000000000000000000000000 0\\t.githooks/pre-commit\\n'\n"
+    )
+    proc = _run_gate(tmp_path, monkeypatch, stubs={"git": stub_git})
+    assert proc.returncode == 1, proc.stderr
+    assert ".githooks/pre-commit is mode '100644'" in proc.stderr
+    assert "==> " not in proc.stderr
 
 
 # ── scaffolding: cmd_new_project renders a project that boots ─────────────────
