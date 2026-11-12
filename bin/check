@@ -53,7 +53,7 @@ hook_mode=$(git ls-files -s -- .githooks/pre-commit | awk '{print $1}')
 # dropping a project's ruff or pytest step fails that suite, not just CI. The
 # tools pytest pin matches the projects' lock — never latest-at-run-time.
 step "rx knowledge base" uv run tools/rx.py check
-step "tools tests" uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q
+step "tools tests" uv run --with 'pytest==9.2.0' pytest tools/test_rx.py -q
 step "001 ruff" bash -c "cd 'projects/001-geometric-reasoning' && uv run --extra dev ruff check ."
 step "001 pytest" bash -c "cd 'projects/001-geometric-reasoning' && uv run --extra dev pytest -q"
 step "002 ruff" bash -c "cd 'projects/002-ftl-axiom-search' && uv run --extra dev ruff check ."

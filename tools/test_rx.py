@@ -30,7 +30,7 @@ handle on it, and the record is itself checked for being live.
 
 Run from the repo root:
 
-    uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q
+    uv run --with 'pytest==9.2.0' pytest tools/test_rx.py -q
 """
 
 from __future__ import annotations
@@ -607,7 +607,7 @@ PLATFORM_OWNED_FLOATING_SPECS = {
     ): {
         "owner": "the platform's setup template",
         "route": (
-            "pin the gate's pytest — tools/test_rx.py runs pytest==9.1.1"
+            "pin the gate's pytest — tools/test_rx.py runs pytest==9.2.0"
         ),
     },
     (
