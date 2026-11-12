@@ -23,6 +23,11 @@ pytest command must name the gate's own pin. A copy is what runs when a
 reviewer copies it, so a floating or drifting copy is the defect, not the
 original.
 
+The four files the platform's setup template owns are scanned against a list
+of their open defects: this repo cannot pin what the template writes, so the
+record of what still floats there — with its owner and its route — is the only
+handle on it, and the record is itself checked for being live.
+
 Run from the repo root:
 
     uv run --with 'pytest==9.1.1' pytest tools/test_rx.py -q
@@ -591,24 +596,31 @@ PLATFORM_OWNED_FILES = frozenset(
 # outright is what let .mcp.json launch an unpinned package with the
 # developer's SENTRY_ACCESS_TOKEN and DEVELOPERZ_API_KEY in scope, unnoticed.
 #
-# (file, spec) -> the route that fixes it. An entry the platform's template has
-# since pinned is stale: drop it.
+# (file, spec) -> the record of the open defect: who owns the fix, and how it
+# is fixed. The record is read by the test below, so it cannot rot into an
+# inert note — an entry without a route is a defect nobody can act on, and an
+# entry whose spec the platform has since pinned is stale and must be dropped.
 PLATFORM_OWNED_FLOATING_SPECS = {
     (
         ".dz/maintainer/reviewer.md",
         "--with pytest",
-    ): (
-        "platform template: pin the gate's pytest — tools/test_rx.py runs "
-        "pytest==9.1.1"
-    ),
+    ): {
+        "owner": "the platform's setup template",
+        "route": (
+            "pin the gate's pytest — tools/test_rx.py runs pytest==9.1.1"
+        ),
+    },
     (
         ".mcp.json",
         "bunx @sentry/mcp-server",
-    ): (
-        "platform template: pin @sentry/mcp-server to an exact version — it "
-        "starts at every agent start with the developer's SENTRY_ACCESS_TOKEN "
-        "and DEVELOPERZ_API_KEY in scope"
-    ),
+    ): {
+        "owner": "the platform's setup template",
+        "route": (
+            "pin @sentry/mcp-server to an exact version — it starts at every "
+            "agent start with the developer's SENTRY_ACCESS_TOKEN and "
+            "DEVELOPERZ_API_KEY in scope"
+        ),
+    },
 }
 
 # Directories that hold no repo content: caches, venvs, the raw corpus, scratch.
@@ -631,9 +643,32 @@ SCAN_SUFFIXES = frozenset(
 )
 # Extensionless files: the repo's own scripts.
 SCAN_SCRIPT_DIRS = frozenset({".githooks", "bin"})
+# Named files whose text the suffix does not say: the env template. A floating
+# spec must not be able to hide in a name the suffix list forgot.
+SCAN_NAMES = frozenset({".env.example"})
+# The developer's own local files — credentials, not the repo's. Never read.
+SCAN_SKIP_NAMES = frozenset(
+    {".env", ".git-credentials", ".netrc", ".npmrc", ".pypirc"}
+)
 
 REPO_ROOT = _RX_PATH.parent.parent
 _THIS_FILE = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
+
+
+def _is_repo_text(path: Path, rel_dir: str) -> bool:
+    """True when the file is one of the repo's own text files.
+
+    The suffix list covers the formats the repo writes. A file with no suffix
+    at all — the repo's own scripts, .gitignore, .gitattributes — is text too,
+    and so is a named dot-config: a floating spec that hides in a name the
+    suffix list forgot is still a floating spec. The developer's local
+    credentials are not the repo's and are never read.
+    """
+    if path.name in SCAN_SKIP_NAMES:
+        return False
+    if path.suffix in SCAN_SUFFIXES or path.name in SCAN_NAMES:
+        return True
+    return path.suffix == "" or rel_dir in SCAN_SCRIPT_DIRS
 
 
 def _text_files(*, platform_owned: bool) -> list[tuple[str, str]]:
@@ -659,7 +694,7 @@ def _text_files(*, platform_owned: bool) -> list[tuple[str, str]]:
                 continue
             if rel == _THIS_FILE:
                 continue
-            if path.suffix not in SCAN_SUFFIXES and rel_dir not in SCAN_SCRIPT_DIRS:
+            if not _is_repo_text(path, rel_dir):
                 continue
             try:
                 found.append((rel, path.read_text(encoding="utf-8")))
@@ -770,6 +805,49 @@ def test_platform_owned_files_resolve_no_unrecorded_package_at_latest() -> None:
     ]
     assert not offenders, (
         "packages resolved at latest in platform-owned files: " + "; ".join(offenders)
+    )
+
+
+def test_the_scan_reads_every_platform_owned_file() -> None:
+    """The platform-owned gate is only as good as the files it read.
+
+    A renamed or missing platform file leaves the offender list empty and the
+    gate green, so the scan must prove it read every one of them.
+    """
+    scanned = {rel for rel, _ in _text_files(platform_owned=True)}
+    missing = sorted(PLATFORM_OWNED_FILES - scanned)
+    assert not missing, "platform-owned files not scanned: " + ", ".join(missing)
+
+
+def test_every_recorded_floating_spec_is_live_and_routed() -> None:
+    """A recorded defect must still be there, and must say who fixes it.
+
+    The repo cannot pin what the platform's setup template writes, so the record
+    is the only handle on it — and a record that lies is worse than no record:
+    an entry the platform has already fixed is stale and must be dropped, and
+    an entry without an owner and a route is a defect nobody can act on.
+    """
+    floating = {
+        rel: set(_floating_specs(rel, text))
+        for rel, text in _text_files(platform_owned=True)
+    }
+    stale = [
+        f"{rel}: {spec}"
+        for (rel, spec) in PLATFORM_OWNED_FLOATING_SPECS
+        if spec not in floating.get(rel, set())
+    ]
+    assert not stale, (
+        "recorded defects the platform has since fixed — drop the entry: "
+        + "; ".join(stale)
+    )
+    unrouted = [
+        f"{rel}: {spec}"
+        for (rel, spec), record in PLATFORM_OWNED_FLOATING_SPECS.items()
+        if not record.get("owner", "").strip()
+        or not record.get("route", "").strip()
+    ]
+    assert not unrouted, (
+        "recorded defects without an owner and a route: " + "; ".join(unrouted)
     )
 
 
