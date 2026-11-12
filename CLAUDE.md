@@ -23,7 +23,7 @@ Each rule lives here and nowhere else in this file. Break one and the work is re
 | **Scope the finding** | State what the experiment cannot conclude. |
 | **A SKIPPED check is not green** | `rx check` exits non-zero if any suite fails or cannot start (pytest missing). A project with no usable `.venv` is SKIPPED (remedy: `uv sync --extra dev`) — those tests never ran; say so. |
 | **No cross-project imports** | Promote shared code to `tools/` or copy it. |
-| **No weights or raw corpora in git** | `results/` JSON + plots **are** committed; `library/corpus/**` is not. |
+| **No weights or raw corpora in git** | `results/` JSON + plots **are** committed; `library/corpus/**` is not, except its committed `INDEX.md`. |
 | **No git worktrees** | Work in this checkout. Parallel agents get disjoint files. |
 
 ## Scope
