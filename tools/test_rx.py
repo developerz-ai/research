@@ -616,10 +616,12 @@ PLATFORM_OWNED_FLOATING_SPECS = {
     ): {
         "owner": "the platform's setup template",
         "route": (
-            "pin @sentry/mcp-server to an exact version in .mcp.json's args — "
-            "0.49.0 was the registry's latest on 2026-11-12, re-check "
-            "registry.npmjs.org/@sentry/mcp-server/latest — it starts at every "
-            "agent start with the developer's SENTRY_ACCESS_TOKEN and "
+            "pin @sentry/mcp-server in .mcp.json's args to a FULL three-component "
+            "version — `bunx @sentry/mcp-server@0.49.0`: npm reads a partial "
+            "version as a range (`@1` is 1.x and serves the newest match), so "
+            "`@1` is not a pin; 0.49.0 was the registry's latest on 2026-11-12, "
+            "re-check registry.npmjs.org/@sentry/mcp-server/latest — it starts "
+            "at every agent start with the developer's SENTRY_ACCESS_TOKEN and "
             "DEVELOPERZ_API_KEY in scope"
         ),
     },
@@ -823,15 +825,32 @@ def _text_package_specs(text: str) -> list[tuple[str, str]]:
     return specs
 
 
-# An exact version: `pkg==1.2.3` (PEP 440) or `pkg@1.2.3` (npm). A range —
-# `pkg@1.x`, `pkg@^1.2.3`, `pkg>=1.0` — is not a pin: the index still serves
-# the newest publish that matches it.
-_EXACT_VERSION = re.compile(r"(?:==|@)\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.\-]+)?$")
+# An exact version names one publish and no other. Two grammars, two rules:
+#
+#   PEP 440 (uv) — `pkg==1.2.3`. `pkg==1` counts too: PEP 440 zero-pads it
+#   to 1.0.0, so it names one publish (packaging: `==1` matches 1.0.0, not
+#   1.0.1).
+#
+#   npm (bunx, npx) — `pkg@1.2.3`. npm reads a PARTIAL version as a range:
+#   `@1` is `1.x` and `@1.2` is `1.2.x`, and the index then serves the newest
+#   publish that matches — `npm view semver@1 version` lists 20 of them,
+#   where `npm view semver@1.1.4 version` lists exactly one. An npm pin
+#   therefore needs all three components: `@1` is a range wearing a pin's
+#   clothes, and a gate that read it as exact would call a floating spec
+#   pinned — the class this whole gate exists to catch.
+#
+# Both patterns match the WHOLE spec, so a spec carrying a second constraint
+# (`pkg==1.2.3||2.0.0`) names more than one publish and is not a pin either.
+_PEP440_PIN = re.compile(r"^[^=!<>\s]*==\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.\-]+)?$")
+_NPM_PIN = re.compile(
+    r"^@?[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)?@\d+\.\d+\.\d+"
+    r"(?:[-+][0-9A-Za-z.\-]+)?$"
+)
 
 
 def _names_an_exact_version(spec: str) -> bool:
-    """True when a package spec pins an exact version (``==`` or ``@``)."""
-    return bool(_EXACT_VERSION.search(spec))
+    """True when a package spec pins one publish (``==`` for uv, ``@`` for npm)."""
+    return bool(_PEP440_PIN.match(spec) or _NPM_PIN.match(spec))
 
 
 def _floating_specs(rel: str, text: str) -> list[str]:
@@ -915,6 +934,37 @@ def test_a_version_range_is_not_an_exact_version(spec: str) -> None:
     """A range still resolves at run time: the index serves the newest match."""
     assert not _names_an_exact_version(spec), spec
     assert _floating_specs("notes.md", f"bunx {spec}"), spec
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "@sentry/mcp-server@1",
+        "@sentry/mcp-server@1.2",
+    ],
+)
+def test_a_partial_npm_version_is_a_range_not_a_pin(spec: str) -> None:
+    """npm reads a partial version as a range: `@1` is `1.x`, `@1.2` is `1.2.x`.
+
+    The index then serves the newest publish that matches — the same defect as
+    `@1.x`, wearing a pin's clothes. `npm view semver@1 version` lists 20
+    matching publishes; `npm view semver@1.1.4 version` lists exactly one. A
+    gate that read `@<digits>` as an exact pin would call that spec pinned,
+    which is the class this whole gate exists to catch.
+    """
+    assert not _names_an_exact_version(spec), spec
+    assert _floating_specs("notes.md", f"bunx {spec}"), spec
+
+
+def test_a_pep440_partial_version_is_still_a_pin() -> None:
+    """PEP 440 zero-pads `==1` to 1.0.0, so it names one publish — a pin.
+
+    The two grammars differ here on purpose: npm's partial version is a
+    range, PEP 440's is a single version.
+    """
+    assert _names_an_exact_version("pytest==1")
+    assert _names_an_exact_version("pytest==1.2")
+    assert not _floating_specs("notes.md", "uvx pytest==1")
 
 
 @pytest.mark.parametrize(
