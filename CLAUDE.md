@@ -4,14 +4,37 @@ Research monorepo for developerz.ai. A factory for research topics: many indepen
 projects, one fixed pipeline. Each takes an idea — from a book, paper, or talk — and finds
 out whether it's **true**, via a runnable PoC plus documentation.
 
+## Non-negotiables
+Each rule lives here and nowhere else in this file. Break one and the work is rejected.
+
+| Rule | Detail / guard |
+|---|---|
+| **Verdicts, not products** | Output = documented verdicts. A cleanly-measured negative is a success — never soften one. Shippable things graduate to their own repo. |
+| **uv only** | Python 3.12 via uv. Never `pip install` into system Python. |
+| **Device-agnostic code** | Call `pick_device()` / `autocast_dtype()` from the project's `device` module. No vendor branching, no `.cuda()`, no `"cuda"` literals, no `torch.cuda.*` capability checks (`torch.cuda.is_available()` is `True` on ROCm). `ruff` enforces it outside `device.py`. |
+| **`pathlib.Path` only** | Repo runs on Windows *and* Linux; a hardcoded `/` breaks one and nobody tests the other. |
+| **Tag every factual statement** | Evidence class (table below). Untagged prose = opinion. |
+| **Falsifier before code** | Write what would kill the claim before what might confirm it. |
+| **Preregister** | Hypothesis + metric + threshold + item count land in the experiment doc before the number exists. Amending is allowed — say that you amended and why. |
+| **Matched baseline** | Matched on compute budget — say which (params · tokens · wall-clock). Vendor benchmark numbers are not baselines: reproduce the *eval*, compare on your own matched pair. |
+| **≥3 seeds, seeds in config** | One seed is an anecdote; report spread. A seed baked into source cannot be swept. |
+| **No number without a run record** | `results/*.json` carries seed, git SHA, hardware, full config, per-item outputs. Never report an aggregate without the per-item data. |
+| **Contamination check** | Before any benchmark claim: if the eval predates the model's cutoff, assume it is in the training data until shown otherwise. |
+| **Scope the finding** | State what the experiment cannot conclude. |
+| **A SKIPPED check is not green** | `rx check` exits non-zero if any suite fails or cannot start (pytest missing). A project with no usable `.venv` is SKIPPED (remedy: `uv sync --extra dev`) — those tests never ran; say so. |
+| **No cross-project imports** | Promote shared code to `tools/` or copy it. |
+| **No weights or raw corpora in git** | `results/` JSON + plots **are** committed; `library/corpus/**` is not, except its committed `INDEX.md`. |
+| **No git worktrees** | Work in this checkout. Parallel agents get disjoint files. |
+
+## Scope
 Subjects are not restricted to AI. Empirical sciences and advanced mathematics are in
 scope, on one condition: the project must reach a **falsifiable measurement on the reference
 hardware**. Where the headline question cannot (most of physics), the project says so
 explicitly in writing *before* the first run, and tests the reachable sub-question without
-implying it settled the original — see `projects/002-ftl-axiom-search/notes/out-of-scope-ftl.md`
-for the worked example.
-
-Output = **documented verdicts**, not products. A cleanly-measured negative result is a success. Never soften one.
+implying it settled the original (never quietly swap in an easier question) — worked example:
+`projects/002-ftl-axiom-search/notes/out-of-scope-ftl.md`. Philosophy is welcome as
+*motivation*, never as a substitute for a metric. No benchmark-leaderboard chasing: we test
+mechanisms, not scores.
 
 ## Response Rules
 - Execute. No preamble. No restating the task.
@@ -20,15 +43,6 @@ Output = **documented verdicts**, not products. A cleanly-measured negative resu
 - Read before speculating. Measure before claiming.
 - Disagree when the user is wrong. State the correction.
 - Terse. Fragments OK. Paths/commands/numbers stay exact.
-
-## Research Rules
-- **Tag every factual statement** with an evidence class (below). Untagged prose = opinion.
-- **Falsifier before code.** Write what would kill the claim before writing what might confirm it.
-- **Preregister.** Hypothesis + metric + threshold land in the experiment doc before the number exists.
-- **Baseline or it didn't happen.** Matched on compute budget — say which (params · tokens · wall-clock).
-- **Multiple seeds.** One seed is an anecdote. ≥3 seeds + spread is a result.
-- **No number without a run record.** `results/*.json` carries seed, git SHA, hardware, full config, per-item outputs.
-- **Scope the finding.** State what the experiment cannot conclude.
 
 ## Evidence classes
 | Tag | Means | Rule |
@@ -43,6 +57,7 @@ The failure mode this prevents: a `[source]` claim quietly promoting itself to b
 ## Layout
 | Path | Holds |
 |---|---|
+| `bin/` | `check` — the canonical "is this tree green?" shim. |
 | `docs/` | Method, toolchain, project kickoff. Load on demand. |
 | `templates/` | Copy when starting a source/idea/claim/experiment/project. |
 | `library/corpus/` | The raw pile — papers, theses, books. **Gitignored**; `INDEX.md` is the committed record. |
@@ -52,7 +67,7 @@ The failure mode this prevents: a `[source]` claim quietly promoting itself to b
 | `library/leads/` | **Discoveries** — things worth more research, scored and gated. What the repo produces of its own. |
 | `articles/` | Findings worth sharing, written for outsiders. Concise, every sentence referenced. |
 | `projects/NNN-slug/` | Self-contained PoC. Own venv, own `CLAUDE.md`, own agents. |
-| `tools/` | Shared scripts. |
+| `tools/` | Shared scripts (`rx.py`). |
 | `.claude/agents/` | Repo-wide pipeline agents. Roster + dispatch → `docs/hive.md`. |
 
 Ideas are **cross-project property** and live only in `library/ideas/`. Never file one under
@@ -75,78 +90,35 @@ scoring gates.
 ## Stack
 | | |
 |---|---|
-| Python | 3.12, managed by **uv** only |
+| Python | 3.12 |
 | DL | PyTorch. Wheel index pinned per backend (`cu126` / `rocm` / `cpu`) — never default PyPI |
 | Platforms | **Windows + Linux. macOS is not a target.** |
 | Accelerators | NVIDIA (CUDA) · AMD (ROCm, Linux) · CPU fallback always works |
 | Reference box | RTX 3090 24GB · Ryzen 7 5700X3D 8c/16t · 64GB RAM |
 
-### Portability policy
-Never branch on vendor in experiment code. Call `pick_device()` / `autocast_dtype()` from the project's `device` module and let it resolve the backend.
-
-| Rule | Why |
-|---|---|
-| No `.cuda()`, no `device="cuda"` literals | Breaks CPU + ROCm. Use `pick_device()`. |
-| No `torch.cuda.*` for capability checks | True on ROCm too, and misleading. Use the helpers. |
-| `bf16` only when the device reports support | Ampere+ and MI200+ yes; older cards and most CPUs no — silently catastrophic elsewhere. |
-| Every experiment must **run** on CPU | Smaller `--limit`, same code path. This is the correctness reference and how CI stays free. |
-| Anything vendor-specific (flash-attn, Triton, `torch.compile`) is **opt-in with a fallback** | It won't build on ROCm/Windows. Guard it, don't require it. |
-| `pathlib.Path` only | Windows *and* Linux. |
-
-`RESEARCH_DEVICE=cpu|cuda|auto` overrides detection for any run.
-
-## Working a project — the coordinator protocol
-
-When told *"let's work on `projects/NNN-slug`"*, you are the coordinator. You hold the
-thread and decide what is true; the hive does the work.
-
-**1. Find out where it's at — before proposing anything.**
-```bash
-uv run tools/rx.py status NNN     # readiness, experiment states, orphan results, claims
-uv run tools/rx.py check          # knowledge-base lint (dangling links, untagged notes, run records, dependency-update config), then the test suites — a red suite is a red check
-uv run tools/rx.py leads          # the discovery queue, ranked
-```
-Then read that project's `CLAUDE.md` — its **Start here** section is the work queue, and its
-preventive rules are the things an agent will otherwise violate with no error to warn it.
-If `status` says the venv is not synced, that is step one and `<cli> doctor` is step two: a
-CPU-only torch wheel is a silent failure, not an error.
-
-**2. Dispatch the hive.** Roster and ownership: `docs/hive.md`.
-- Everything independent goes out **in parallel, on disjoint files**. One writer per path is
-  what makes that safe — no locking, no coordination.
-- A hard question gets **several agents at different angles**, not the same angle N times.
-  Where the lenses disagree is where the real uncertainty is; identical agents on one base
-  model make identical mistakes.
-- Read-only agents (`falsifier`, `run-auditor`, `contamination-auditor`) run *after* work
-  lands, never as a substitute for it.
-
-**3. Loop.** Dispatch → read what came back → audit → re-dispatch. Each pass should either
-close a work item, kill a lead, or produce a new one. Stop when the queue is empty, the next
-step is blocked on something only the user can decide, or the remaining work is not worth
-its cost — and say which.
-
-**4. Never delegate the judgement.** Subagents report; you decide. Specifically:
-- No number is believed until `run-auditor` (provenance) and `falsifier` (adversarial) have
-  been through it.
-- The verdict is written by you, in the experiment doc, with what it *cannot* conclude.
-- After any experiment finishes — especially a null — run `lead-hunter`. A null is where the
-  assumptions become visible, and it is the repo's richest source of new work.
-
-**5. Report honestly.** What ran, what did not, what was skipped and why. A cleanly-measured
-negative is a success. Never soften one.
+Portability:
+- **A CPU-only torch wheel is a silent failure, not an error.** Everything "works", 50× slower. Guard: `uv run geom doctor` in every fresh venv — it fails loudly when wheel and hardware disagree.
+- `bf16` only when the device reports support (Ampere+, MI200+); elsewhere it is silently catastrophic.
+- Every experiment must **run** on CPU (smaller `--limit`, same code path) — the correctness reference, and how CI stays free.
+- Vendor-specific code (flash-attn, Triton, `torch.compile`) is opt-in with a fallback; it won't build on ROCm/Windows.
+- `RESEARCH_DEVICE=cpu|cuda|auto` overrides detection for any run.
 
 ## Commands
 ```bash
 # from repo root — the DX entrypoint, no venv needed
+bin/check                        # canonical green check: thin shim over `uv run tools/rx.py check`
+bin/check --no-tests             # same, lint only (fast)
 uv run tools/rx.py help          # catalog of every command in the repo
 uv run tools/rx.py status NNN    # readiness + state of one project
+uv run tools/rx.py check         # KB lint (dangling links, untagged notes, run records, dependency-update config), then the test suites
+uv run tools/rx.py test          # the test suites: root suite + every project with a synced .venv
 uv run tools/rx.py leads         # discovery queue: what is worth more research
+uv run tools/rx.py ingest        # acquire + queue documents from the corpus
 uv run tools/rx.py doctor        # hardware + backend report
-uv run tools/rx.py test          # the test suites: the root suite + every project with a synced .venv
-uv run tools/rx.py check         # the knowledge-base lint, then the same test suites
-uv run tools/rx.py new-project "slug"
-uv run tools/rx.py new source|idea|claim|experiment <slug>
 uv run tools/rx.py projects      # status of every project
+uv run tools/rx.py new-project "slug"
+uv run tools/rx.py new source|idea|synthesis|lead|article <slug>
+uv run tools/rx.py new claim|experiment <slug> --project NNN
 
 # inside a project
 cd projects/001-geometric-reasoning
@@ -156,24 +128,35 @@ uv run geom --help               # project CLI
 uv run pytest -q                 # tests
 uv run ruff check --fix . && uv run ruff format .
 ```
-Discover depth via `rx.py help` — do not memorise or duplicate the catalog here. Per-project commands live in that project's `CLAUDE.md`.
+Discover depth via `rx.py help` — do not duplicate the catalog here. Per-project commands live in that project's `CLAUDE.md`.
 
-## Hard boundaries
-- Never `pip install` into system Python. uv only.
-- Never commit weights, checkpoints, or raw corpora. `results/` JSON + plots **are** committed.
-- Never let a project import another project. Promote shared code to `tools/` or copy it.
-- Never report an aggregate without per-item data behind it — it can't be re-analysed.
-- Never use git worktrees. Work in this checkout. Parallel agents get disjoint files.
+## Working a project — the coordinator protocol
+When told *"let's work on `projects/NNN-slug`"*, you are the coordinator. You hold the
+thread and decide what is true; the hive does the work.
 
-## Preventive rules (these bite before any symptom appears)
-- **A CPU-only torch wheel is a silent failure, not an error.** The default PyPI wheel has no GPU; everything still "works", just 50× slower, and you won't notice until the run is done. Guard: `uv run geom doctor` in every fresh venv — it fails loudly when the wheel and the hardware disagree.
-- **`torch.cuda.is_available()` is `True` on AMD/ROCm.** It is not a vendor test. Branching on it puts CUDA-only code on an AMD card. Guard: `device.py` helpers only; `ruff` forbids `.cuda()` and `"cuda"` literals outside that module.
-- **Vendor benchmark numbers are not baselines.** "60× smaller model beats X" compares against an unnamed X on an unnamed eval. Reproduce the *eval*, then compare on your own matched pair, or the number means nothing.
-- **A metric chosen after seeing the data is not a measurement.** Threshold + item count go in the experiment doc first. Amending is allowed — say that you amended and why.
-- **Paths: `pathlib.Path` only.** This repo runs on Windows *and* Linux; a hardcoded `/` breaks one of them and nobody tests the other.
-- **Seeds live in the config, not the code.** A seed baked into a source file cannot be swept, and a sweep is the only way to know if a result is real.
-- **Contamination check before any benchmark claim.** If the eval set predates the model's cutoff, assume it's in the training data until shown otherwise.
-- **A check that could not run the tests is not green.** `rx check` runs the test suites after the knowledge-base lint and exits non-zero if any suite fails. A suite that could not start because pytest is missing is a failure. A project whose `.venv` is missing — or exists but has no interpreter in it — is reported SKIPPED with the remedy `uv sync --extra dev`, and a SKIP still means those tests never ran: say so instead of reporting a green check.
+**1. Find out where it's at — before proposing anything.** Run `rx.py status NNN`,
+`bin/check`, `rx.py leads`. Then read that project's `CLAUDE.md` — its **Start here**
+section is the work queue, and its preventive rules are what an agent will otherwise violate
+with no error to warn it. If `status` says the venv is not synced, that is step one and
+`<cli> doctor` is step two.
+
+**2. Dispatch the hive.** Roster and ownership: `docs/hive.md`.
+- Everything independent goes out **in parallel**.
+- A hard question gets **several agents at different angles**, not the same angle N times.
+  Where the lenses disagree is the real uncertainty; identical agents on one base model make identical mistakes.
+- Read-only agents (`falsifier`, `run-auditor`, `contamination-auditor`) run *after* work
+  lands, never as a substitute for it.
+
+**3. Loop.** Dispatch → read what came back → audit → re-dispatch. Each pass should close a
+work item, kill a lead, or produce a new one. Stop when the queue is empty, the next step
+is blocked on something only the user can decide, or the remainder is not worth its cost — and say which.
+
+**4. Never delegate the judgement.** Subagents report; you decide.
+- No number is believed until `run-auditor` (provenance) and `falsifier` (adversarial) have been through it.
+- The verdict is written by you, in the experiment doc.
+- After any experiment finishes — especially a null — run `lead-hunter`.
+
+**5. Report honestly.** What ran, what did not, what was skipped and why.
 
 ## Writing style for notes
 - Markdown. Cross-link as `[[library/ideas/slug]]`. Link liberally; a dangling link marks work to do.
@@ -192,8 +175,3 @@ Discover depth via `rx.py help` — do not memorise or duplicate the catalog her
 | `projects/*/CLAUDE.md` | Touching that project |
 
 Org-wide conventions: [developerz-ai/gold-standards-in-ai](https://github.com/developerz-ai/gold-standards-in-ai).
-
-## What NOT to do here
-- **No products.** Something worth shipping graduates to its own repo; this one keeps the verdict.
-- **No benchmark leaderboard chasing.** We test mechanisms, not scores.
-- **No unfalsifiable projects.** Philosophy is welcome as *motivation*; it never substitutes for a metric. If a claim can't be reached from a 3090, say so explicitly in the verdict rather than quietly testing something easier and implying it settled the question.
