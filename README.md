@@ -74,14 +74,14 @@ uv run tools/rx.py help       # catalog of every command in the repo
 uv run tools/rx.py doctor     # hardware + backend report
 uv run tools/rx.py test       # the test suites: root suite + every project with a synced .venv
 uv run tools/rx.py check      # the knowledge-base lint, then the test suites
-python bin/check              # shim over the same check (POSIX: ./bin/check)
+./bin/check                   # the full gate (bash: the canonical check + tools tests + every project)
 
 cd projects/001-geometric-reasoning
 uv sync                       # creates .venv, installs deps
 uv run geom doctor            # verifies the backend, prints hardware
 ```
 
-`rx check` runs the test suites as well as the knowledge-base lint — a red suite is a red check. `bin/check` is a thin shim over that same command (`./bin/check` on POSIX, `python bin/check` on Windows), so one command proves the tree end to end.
+`rx check` runs the test suites as well as the knowledge-base lint — a red suite is a red check. `bin/check` runs that same canonical command first, then the tools tests (pytest pinned to the projects' lock) and every project's ruff + pytest — with every failure classified (75: the environment, 1: the change) — so one command proves the tree end to end.
 
 Full details in [`docs/toolchain.md`](docs/toolchain.md).
 

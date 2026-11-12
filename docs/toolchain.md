@@ -104,10 +104,10 @@ guards — the dependency-update linter, the scaffold validator, the test harnes
 so a broken guard fails a test instead of passing silently.
 
 ```bash
-uv run --with pytest pytest tools/test_rx.py -q   # the root suite, directly
+uv run --with 'pytest==9.2.0' pytest tools/test_rx.py -q  # the root suite, directly (the gate's pin)
 uv run tools/rx.py test                           # the harness: root suite + every project
 uv run tools/rx.py check                          # the lint, then the same suites
-./bin/check                                       # shim over `uv run tools/rx.py check` (Windows: python bin/check)
+./bin/check                                       # the gate: the canonical check, then the tools tests, then every project's ruff + pytest
 ```
 
 `rx test` runs:
@@ -123,11 +123,11 @@ A suite that fails fails the run, and so does pytest's exit code 5 ("no tests co
 an empty suite is a hole in the guard, not a clean bill of health.
 
 `rx.py` stays stdlib-only and imports no third-party package. pytest is spawned in a
-child process — `uv run --isolated --with pytest pytest ...` when the installed uv
-understands `--isolated` (the flag is added only when `uv run --help` lists it),
-otherwise `uv run --with pytest pytest ...`, falling back to `python -m pytest` when uv
-is not on PATH — with `VIRTUAL_ENV` stripped, so the child never modifies the
-ephemeral environment `rx.py` itself runs in.
+child process — `uv run --isolated`, with pytest added through `--with`, when the installed
+uv understands `--isolated` (the flag is added only when `uv run --help` lists it), otherwise
+`uv run` with the same `--with` addition, falling back to `python -m pytest` when uv is not
+on PATH — with `VIRTUAL_ENV` stripped, so the child never modifies the ephemeral environment
+`rx.py` itself runs in.
 
 ## PyTorch and CUDA
 

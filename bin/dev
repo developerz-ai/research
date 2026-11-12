@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# one-command dev — established by dz-runner setup mode. One command; adjust as the repo grows.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Same .env contract as bin/setup: the values reach the doctor/project/lead runs
+# below (uv run does not read .env on its own).
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+export PATH="$HOME/.local/bin:$PATH" && uv run tools/rx.py doctor && uv run tools/rx.py projects && uv run tools/rx.py leads && (cd projects/001-geometric-reasoning && uv run geom doctor) && (cd projects/002-ftl-axiom-search && uv run ftl doctor)

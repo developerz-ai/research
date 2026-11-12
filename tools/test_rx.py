@@ -7,23 +7,30 @@ and ``_lock_divergences`` outright would leave the suite green. These tests driv
 validation against a synthetic tree so each failure mode is asserted separately.
 
 The harness tests pin ``rx test`` and the suites inside ``rx check``. The runner is
-faked, so no test spawns a real pytest and none of them reach the network. The
-``bin/check`` shim is loaded by path, and the process it starts is faked too.
+faked, so no test spawns a real pytest and none of them reach the network.
 
-The scaffold tests drive ``cmd_new_project`` against the real
-``templates/`` directory, so template drift fails here instead of at the next
-project's creation.
+The scaffold tests drive ``cmd_new_project`` against the real ``templates/``
+directory, so template drift fails here instead of at the next project's
+creation.
+
+The gate tests pin ``bin/check``'s contents: every ``projects/NNN-*`` directory
+keeps its ruff and pytest step, and the root tools env keeps an exact pytest pin
+— CI only sees the gate's exit code, so these are what stop it silently
+shrinking. The gate itself runs with a stubbed ``uv``, so its 75/1 exit-code
+contract, its echoed success output, and the canonical command it starts get
+failing tests of their own.
 
 Run from the repo root:
 
-    uv run --with pytest pytest tools/test_rx.py -q
+    uv run --with 'pytest==9.2.0' pytest tools/test_rx.py -q
 """
 
 from __future__ import annotations
 
 import ast
-import importlib.machinery
 import importlib.util
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -32,7 +39,6 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
-from types import ModuleType
 
 import pytest
 
@@ -493,6 +499,831 @@ def test_lock_divergences_compare_specifiers_not_just_names(tmp_path: Path) -> N
     lock = _write(tmp_path / "uv.lock", UV_LOCK.format(name="testpkg"))
     divergences = rx._lock_divergences(pyproject, lock)
     assert any("'numpy'" in d and "'>=2'" in d and "'>=1.26'" in d for d in divergences)
+
+
+# ── bin/check: the gate's contents are pinned, not just its exit code ───────
+
+GATE_SCRIPT = _RX_PATH.parent.parent / "bin" / "check"
+
+# Every projects/NNN-* directory must be gated by bin/check: CI only sees the
+# gate's exit code, so a project — or one half of its check — dropped from the
+# script would otherwise shrink the suite with CI staying green.
+GATED_PROJECTS = sorted(
+    p.name
+    for p in (_RX_PATH.parent.parent / "projects").iterdir()
+    if p.is_dir() and re.match(r"\d{3}-", p.name)
+)
+
+
+def _gate_steps_for(project: str, fragment: str) -> list[str]:
+    """Lines of bin/check that pair a project directory with a check fragment."""
+    gate = GATE_SCRIPT.read_text(encoding="utf-8")
+    return [ln for ln in gate.splitlines() if f"projects/{project}" in ln and fragment in ln]
+
+
+@pytest.mark.parametrize("project", GATED_PROJECTS)
+def test_bin_check_runs_ruff_for_every_project(project: str) -> None:
+    """Each project keeps its ruff step, reached only after its cd succeeds."""
+    lines = _gate_steps_for(project, "uv run --extra dev ruff check .")
+    assert lines, f"no ruff step for {project} in bin/check"
+    assert any("&&" in ln for ln in lines), (
+        f"the ruff step for {project} no longer requires its cd to succeed"
+    )
+
+
+@pytest.mark.parametrize("project", GATED_PROJECTS)
+def test_bin_check_runs_pytest_for_every_project(project: str) -> None:
+    """Each project keeps its pytest step."""
+    assert _gate_steps_for(project, "uv run --extra dev pytest -q"), (
+        f"no pytest step for {project} in bin/check"
+    )
+
+
+def test_bin_check_pins_the_tools_pytest() -> None:
+    """`uv run --with pytest` resolves latest-at-run-time — that must not float.
+
+    The gate's own runner is installed fresh on every CI run, so an exact pin is
+    what keeps a new pytest release from turning every unrelated change red —
+    and the pin must be a version the projects' locks actually record (the pin
+    follows the projects' lock), not any exact number someone typed in.
+    """
+    gate = GATE_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?pytest==(\d+\.\d+\.\d+)", gate
+    )
+    assert match, "bin/check runs an unpinned --with pytest"
+    locked = {
+        pkg["version"]
+        for lock in (_RX_PATH.parent.parent / "projects").glob("*/uv.lock")
+        for pkg in tomllib.loads(lock.read_text(encoding="utf-8")).get("package", [])
+        if pkg.get("name") == "pytest"
+    }
+    assert locked, "no projects/*/uv.lock records a pytest version for the gate to follow"
+    assert match.group(1) in locked, (
+        f"gate pin pytest=={match.group(1)} is recorded by no projects' uv.lock "
+        f"(locked pytest versions: {sorted(locked)})"
+    )
+
+
+# ── package resolution: nothing this repo owns may resolve a package at latest ─
+
+# A package spec without a version is resolved by its index at run time: the
+# newest publish, every time, with the developer's environment in scope. The
+# gate's pytest is pinned above; the copies of that command — the skills, the
+# commands, the docs a reviewer copies from — have to be pinned too.
+#
+# The platform's setup template owns four files: the merge proof accepts only
+# the platform's own bytes for them, so this repo cannot pin what they run —
+# their drift belongs in the platform's template, in a separate pull request.
+PLATFORM_OWNED_FILES = frozenset(
+    {
+        ".dz/maintainer/maintainer.yml",
+        ".dz/maintainer/reviewer.md",
+        ".github/workflows/ci.yml",
+        ".mcp.json",
+    }
+)
+
+# They are not unchecked, though — they are scanned too, against this list. A
+# package spec that still floats in one of them is an open defect with a named
+# route; a spec that is NOT on this list fails the gate. Excluding those files
+# outright is what let .mcp.json launch an unpinned package with the
+# developer's SENTRY_ACCESS_TOKEN and DEVELOPERZ_API_KEY in scope, unnoticed.
+#
+# (file, spec) -> the record of the open defect: who owns the fix, and how it
+# is fixed. The record is read by the test below, so it cannot rot into an
+# inert note — an entry without a route is a defect nobody can act on, and an
+# entry whose spec the platform has since pinned is stale and must be dropped.
+PLATFORM_OWNED_FLOATING_SPECS = {
+    (
+        ".dz/maintainer/reviewer.md",
+        "--with pytest",
+    ): {
+        "owner": "the platform's setup template",
+        "route": (
+            "pin the gate's pytest — tools/test_rx.py runs pytest==9.2.0"
+        ),
+    },
+    (
+        ".mcp.json",
+        "bunx @sentry/mcp-server",
+    ): {
+        "owner": "the platform's setup template",
+        "route": (
+            "pin @sentry/mcp-server in .mcp.json's args to a FULL three-component "
+            "version — `bunx @sentry/mcp-server@0.49.0`: bun and npm both read a "
+            "partial version as a range (`@1` is 1.x and serves the newest match), "
+            "so `@1` is not a pin; 0.49.0 was the registry's latest on 2026-11-12, "
+            "re-check registry.npmjs.org/@sentry/mcp-server/latest — it starts "
+            "at every agent start with the developer's SENTRY_ACCESS_TOKEN and "
+            "DEVELOPERZ_API_KEY in scope"
+        ),
+    },
+}
+
+# Directories that hold no repo content: caches, venvs, the raw corpus, scratch.
+SCAN_SKIP_DIRS = frozenset(
+    {
+        ".codegraph",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "venv",
+    }
+)
+SCAN_SKIP_PATHS = frozenset({"library/corpus", "tmp"})
+SCAN_SUFFIXES = frozenset(
+    {".cfg", ".ini", ".json", ".md", ".sh", ".toml", ".txt", ".yaml", ".yml"}
+)
+# Extensionless files: the repo's own scripts.
+SCAN_SCRIPT_DIRS = frozenset({".githooks", "bin"})
+# Named files whose text the suffix does not say: the env template. A floating
+# spec must not be able to hide in a name the suffix list forgot.
+SCAN_NAMES = frozenset({".env.example"})
+# The developer's own local files — credentials, not the repo's. Never read.
+SCAN_SKIP_NAMES = frozenset(
+    {".env", ".git-credentials", ".netrc", ".npmrc", ".pypirc"}
+)
+
+REPO_ROOT = _RX_PATH.parent.parent
+_THIS_FILE = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
+
+
+def _is_repo_text(path: Path, rel_dir: str) -> bool:
+    """True when the file is one of the repo's own text files.
+
+    The suffix list covers the formats the repo writes. A file with no suffix
+    at all — the repo's own scripts, .gitignore, .gitattributes — is text too,
+    and so is a named dot-config: a floating spec that hides in a name the
+    suffix list forgot is still a floating spec. The developer's local
+    credentials are not the repo's and are never read.
+    """
+    if path.name in SCAN_SKIP_NAMES:
+        return False
+    if path.suffix in SCAN_SUFFIXES or path.name in SCAN_NAMES:
+        return True
+    return path.suffix == "" or rel_dir in SCAN_SCRIPT_DIRS
+
+
+def _text_files(*, platform_owned: bool) -> list[tuple[str, str]]:
+    """Every (repo-relative path, text) this repo owns and can edit.
+
+    `platform_owned=False` — the repo's own files, the platform's excluded.
+    `platform_owned=True` — only the platform-owned files.
+    """
+    found: list[tuple[str, str]] = []
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        rel_dir = Path(dirpath).relative_to(REPO_ROOT).as_posix()
+        keep = []
+        for name in dirnames:
+            child = name if rel_dir == "." else f"{rel_dir}/{name}"
+            if name in SCAN_SKIP_DIRS or child in SCAN_SKIP_PATHS:
+                continue
+            keep.append(name)
+        dirnames[:] = sorted(keep)
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if (rel in PLATFORM_OWNED_FILES) != platform_owned:
+                continue
+            if rel == _THIS_FILE:
+                continue
+            if not _is_repo_text(path, rel_dir):
+                continue
+            try:
+                found.append((rel, path.read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+    return found
+
+
+def _repo_owned_text_files() -> list[tuple[str, str]]:
+    """Every (repo-relative path, text) this repo owns and can edit."""
+    return _text_files(platform_owned=False)
+
+
+# `--with pytest` (no version) pulls whatever the index serves newest, and
+# `--with=pytest` is that same command in another spelling — uv accepts both,
+# so both are read.
+_UNPINNED_WITH = re.compile(
+    r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?([A-Za-z0-9_.\-=]+)"
+)
+
+# A runner executes the package it is handed and the index decides which
+# publish that is. The move hides behind several names: `bun x` is `bunx`,
+# `pnpm dlx` and `npm exec` are npx under another word, `uvx --from pkg tool`
+# names the package in a flag, and `uv tool run pkg` is uvx spelled out. A
+# flag may also sit between the runner and the package (`bunx --bun pkg`), and
+# the package may carry a comparator (`uvx pkg==1.2.3`). Reading only
+# "npx | bunx | uvx" leaves the class an open door: the next file to use
+# another spelling runs an unpinned publish again and this gate says nothing.
+_RUNNER_PATTERNS = (
+    re.compile(r"\b(?:bunx|bun[ \t]+x|npx|pnpx|uvx)\b"),
+    re.compile(r"\b(?:pnpm|npm|yarn)[ \t]+(?:dlx|exec)\b"),
+    re.compile(r"\buv[ \t]+tool[ \t]+(?:run|install)\b"),
+)
+# Flags whose value IS the package: `uvx --from ruff==0.1.0 ruff`,
+# `npm exec --package=@scope/pkg@1.2.3 -- cmd`. The value may be attached with
+# `=` or given as the next word, and npm may repeat the flag.
+_PACKAGE_FLAGS = frozenset({"--from", "--package", "--pkg"})
+# `-p` is the short spelling of `--package` for npm and bunx — both measured
+# in their own --help output — but for uvx it is `--python`, so it names the
+# package only for the runners that spell it that way. Reading it for uvx
+# would name a Python version a package.
+_NPM_SHORT_PACKAGE_FLAG = "-p"
+# The uv runners, whose `-p` is --python.
+_UV_RUNNERS = frozenset({"uv", "uvx"})
+# Punctuation prose leaves around a command: quotes, backticks, brackets.
+_PROSE_PUNCTUATION = "\"'`(),.;"
+# What a package spec looks like on a command line: an npm name — scoped or
+# not — with an optional version or version range and an optional comparator.
+_PACKAGE_TOKEN = re.compile(
+    r"^(?:@[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+|[A-Za-z0-9][A-Za-z0-9_.\-]*)"
+    r"(?:@[^\s]+)?(?:[<>=!~][^\s]+)?$"
+)
+
+# A server config names its runner in "command" and the package in "args", so
+# the pair has to be read as a pair: "bunx" alone says nothing, "bunx
+# @sentry/mcp-server" says the newest publish runs with the caller's secrets.
+PACKAGE_RUNNERS = frozenset({"bunx", "dlx", "npx", "pnpx", "uvx"})
+EXEC_COMMANDS = frozenset({"dlx", "exec"})
+# `bun x pkg` is `bunx pkg` — the same runner under its long spelling.
+BUN_LONG_FORM = "x"
+# `npm exec pkg`, `pnpm dlx pkg`, `yarn dlx pkg`: the runner is the manager.
+NPM_MANAGERS = frozenset({"npm", "pnpm", "yarn"})
+
+
+def _package_token(word: str) -> str | None:
+    """The package spec in `word`, or None when it names no package."""
+    word = word.strip(_PROSE_PUNCTUATION)
+    return word if _PACKAGE_TOKEN.match(word) else None
+
+
+def _packages_after_words(
+    words: list[str], start: int, runner: str = ""
+) -> list[str]:
+    """The package specs the words from `start` on name.
+
+    Flags are skipped — except the ones whose value IS the package
+    (`uvx --from pkg tool`, `npm exec --package=pkg -- cmd`): their value may
+    be attached with `=` or given as the next word, and npm may repeat the
+    flag, so every value is read. A word that is only punctuation the prose
+    left around the runner is skipped too. Once a flag named the package, the
+    words after it are the command it runs, not another package; with no such
+    flag, the first real word that names a package is it — and the first real
+    word that names none ends the scan, so a config's own keys are never read
+    as one.
+    """
+    package_flags = _PACKAGE_FLAGS
+    if runner.split(" ")[0] not in _UV_RUNNERS:
+        package_flags = package_flags | {_NPM_SHORT_PACKAGE_FLAG}
+    specs: list[str] = []
+    index = start
+    while index < len(words):
+        word = words[index].strip(_PROSE_PUNCTUATION)
+        if not word:
+            index += 1
+            continue
+        if word.startswith("-"):
+            flag, separator, value = word.partition("=")
+            if separator and flag in package_flags:
+                token = _package_token(value)
+                if token:
+                    specs.append(token)
+                index += 1
+                continue
+            if word in package_flags and index + 1 < len(words):
+                token = _package_token(words[index + 1])
+                if token:
+                    specs.append(token)
+                index += 2
+                continue
+            index += 1
+            continue
+        if not specs:
+            token = _package_token(word)
+            if token:
+                specs.append(token)
+        break
+    return specs
+
+
+def _runner_package_specs(data: object) -> list[tuple[str, str]]:
+    """(runner, package spec) of every config entry that runs a package."""
+    specs: list[tuple[str, str]] = []
+    if isinstance(data, dict):
+        command = data.get("command")
+        args = data.get("args")
+        if isinstance(command, str) and isinstance(args, list):
+            words = [a for a in args if isinstance(a, str)]
+            name = Path(command).name
+            if name in PACKAGE_RUNNERS:
+                packages = _packages_after_words(words, 0, name)
+                runner = name
+            elif name == "bun" and words[:1] == [BUN_LONG_FORM]:
+                packages = _packages_after_words(words, 1, f"bun {BUN_LONG_FORM}")
+                runner = f"bun {BUN_LONG_FORM}"
+            elif (
+                name in NPM_MANAGERS
+                and words[:1]
+                and words[0] in EXEC_COMMANDS
+            ):
+                packages = _packages_after_words(words, 1, f"{name} {words[0]}")
+                runner = f"{name} {words[0]}"
+            else:
+                packages, runner = [], name
+            for package in packages:
+                specs.append((runner, package))
+        for value in data.values():
+            specs.extend(_runner_package_specs(value))
+    elif isinstance(data, list):
+        for value in data:
+            specs.extend(_runner_package_specs(value))
+    return specs
+
+
+def _text_package_specs(text: str) -> list[tuple[str, str]]:
+    """(runner, package spec) of every package a runner in `text` executes."""
+    specs: list[tuple[str, str]] = []
+    for pattern in _RUNNER_PATTERNS:
+        for match in pattern.finditer(text):
+            line = text[match.end():].split("\n", 1)[0]
+            runner = " ".join(match.group(0).split())
+            for package in _packages_after_words(line.split(), 0, runner):
+                specs.append((runner, package))
+    return specs
+
+
+# An exact version names one publish and no other. Two grammars, two rules:
+#
+#   PEP 440 (uv) — `pkg==1.2.3`. `pkg==1` counts too: PEP 440 zero-pads it
+#   to 1.0.0, so it names one publish (packaging: `==1` matches 1.0.0, not
+#   1.0.1).
+#
+#   npm (bunx, npx) — `pkg@1.2.3`. npm reads a PARTIAL version as a range:
+#   `@1` is `1.x` and `@1.2` is `1.2.x`, and the index then serves the newest
+#   publish that matches — `npm view semver@1 version` lists 20 of them,
+#   where `npm view semver@1.1.4 version` lists exactly one. An npm pin
+#   therefore needs all three components: `@1` is a range wearing a pin's
+#   clothes, and a gate that read it as exact would call a floating spec
+#   pinned — the class this whole gate exists to catch.
+#
+# Both patterns match the WHOLE spec, so a spec carrying a second constraint
+# (`pkg==1.2.3||2.0.0`) names more than one publish and is not a pin either.
+_PEP440_PIN = re.compile(r"^[^=!<>\s]*==\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.\-]+)?$")
+_NPM_PIN = re.compile(
+    r"^@?[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)?@\d+\.\d+\.\d+"
+    r"(?:[-+][0-9A-Za-z.\-]+)?$"
+)
+
+
+def _names_an_exact_version(spec: str) -> bool:
+    """True when a package spec pins one publish (``==`` for uv, ``@`` for npm)."""
+    return bool(_PEP440_PIN.match(spec) or _NPM_PIN.match(spec))
+
+
+def _floating_specs(rel: str, text: str) -> list[str]:
+    """Every package spec in `text` that its index resolves at run time."""
+    floating: list[str] = []
+    for match in _UNPINNED_WITH.finditer(text):
+        if not _names_an_exact_version(match.group(1)):
+            floating.append(f"--with {match.group(1)}")
+    for runner, package in _text_package_specs(text):
+        if not _names_an_exact_version(package):
+            floating.append(f"{runner} {package}")
+    if rel.endswith(".json"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        for runner, package in _runner_package_specs(data):
+            if not _names_an_exact_version(package):
+                floating.append(f"{runner} {package}")
+    return floating
+
+
+# ── the guard for the class, tested where the class is detected ──────────────
+#
+# The gates below are only as good as the detection under them. A regex that
+# stops reading one spelling of "run the newest publish" opens the door again,
+# and nothing else in this suite would notice: the gate would go on reporting
+# "clean" while a file ran an unpinned package with the caller's secrets in
+# scope. These tests pin the spellings, so a future edit to the detection
+# cannot quietly narrow it.
+
+
+_RUNNER_FORMS = [
+    "bunx @sentry/mcp-server",
+    "bun x @sentry/mcp-server",
+    "npx @sentry/mcp-server",
+    "pnpx @sentry/mcp-server",
+    "uvx @sentry/mcp-server",
+    "pnpm dlx @sentry/mcp-server",
+    "npm exec @sentry/mcp-server",
+    "yarn dlx @sentry/mcp-server",
+    "uv tool run @sentry/mcp-server",
+    "bunx --bun @sentry/mcp-server",
+    "uvx --from @sentry/mcp-server tool",
+    "uvx --from=@sentry/mcp-server tool",
+    "npm exec --package=@sentry/mcp-server -- sentry-mcp",
+    "bunx --package=@sentry/mcp-server sentry-mcp",
+    "npx -p @sentry/mcp-server sentry-mcp",
+]
+
+
+@pytest.mark.parametrize("form", _RUNNER_FORMS)
+def test_every_runner_spelling_is_read_as_a_floating_package(form: str) -> None:
+    """Each way of running a package at run time is caught, not just npx/bunx."""
+    assert _floating_specs("notes.md", form), form
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "bunx @sentry/mcp-server@0.49.0",
+        "bun x @sentry/mcp-server@0.49.0",
+        "npx @sentry/mcp-server@0.49.0",
+        "uvx @sentry/mcp-server==0.49.0",
+        "bunx --bun @sentry/mcp-server@0.49.0",
+        "uvx --from @sentry/mcp-server==0.49.0 tool",
+        "uvx --from=ruff==0.1.0 ruff",
+        "npm exec --package=@sentry/mcp-server@0.49.0 -- sentry-mcp",
+        "npm exec --package=is-number@7.0.0 -- is-number",
+    ],
+)
+def test_a_pinned_package_is_not_reported_as_floating(form: str) -> None:
+    """A spec with an exact version is a pin — the gate must not cry wolf."""
+    assert not _floating_specs("notes.md", form), form
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "uv run --with=pytest pytest -q",
+        "uv run --with='pytest' pytest -q",
+    ],
+)
+def test_the_equals_form_of_with_is_read_as_a_floating_package(form: str) -> None:
+    """`--with=pkg` resolves the newest publish, exactly like `--with pkg`.
+
+    The two spellings are the same command, and uv accepts both — a regex that
+    reads only the spaced one leaves the class an open door, and nothing else
+    in this suite would notice.
+    """
+    assert _floating_specs("notes.md", form), form
+
+
+def test_the_equals_form_of_with_with_a_pin_is_not_floating() -> None:
+    """`--with=pkg==1.2.3` names one publish — a pin, spelled with `=`."""
+    assert not _floating_specs("notes.md", "uv run --with=pytest==9.2.0 pytest -q")
+
+
+def test_an_inline_package_flag_names_the_package_not_the_command() -> None:
+    """`npm exec --package=pkg -- cmd` runs pkg; cmd is not the package.
+
+    Reading the command instead of the package would report the wrong spec —
+    and would report a pinned package as floating.
+    """
+    floating = _floating_specs(
+        "notes.md", "npm exec --package=@sentry/mcp-server -- sentry-mcp"
+    )
+    assert "npm exec @sentry/mcp-server" in floating, floating
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "@sentry/mcp-server@1.x",
+        "@sentry/mcp-server@^1.2.3",
+        "@sentry/mcp-server@latest",
+        "@sentry/mcp-server>=1.0",
+        "@sentry/mcp-server==1.x",
+    ],
+)
+def test_a_version_range_is_not_an_exact_version(spec: str) -> None:
+    """A range still resolves at run time: the index serves the newest match."""
+    assert not _names_an_exact_version(spec), spec
+    assert _floating_specs("notes.md", f"bunx {spec}"), spec
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "@sentry/mcp-server@1",
+        "@sentry/mcp-server@1.2",
+    ],
+)
+def test_a_partial_npm_version_is_a_range_not_a_pin(spec: str) -> None:
+    """npm reads a partial version as a range: `@1` is `1.x`, `@1.2` is `1.2.x`.
+
+    The index then serves the newest publish that matches — the same defect as
+    `@1.x`, wearing a pin's clothes. `npm view semver@1 version` lists 20
+    matching publishes; `npm view semver@1.1.4 version` lists exactly one. A
+    gate that read `@<digits>` as an exact pin would call that spec pinned,
+    which is the class this whole gate exists to catch.
+    """
+    assert not _names_an_exact_version(spec), spec
+    assert _floating_specs("notes.md", f"bunx {spec}"), spec
+
+
+def test_a_pep440_partial_version_is_still_a_pin() -> None:
+    """PEP 440 zero-pads `==1` to 1.0.0, so it names one publish — a pin.
+
+    The two grammars differ here on purpose: npm's partial version is a
+    range, PEP 440's is a single version.
+    """
+    assert _names_an_exact_version("pytest==1")
+    assert _names_an_exact_version("pytest==1.2")
+    assert not _floating_specs("notes.md", "uvx pytest==1")
+
+
+@pytest.mark.parametrize(
+    "command,args",
+    [
+        ("bunx", ["@sentry/mcp-server"]),
+        ("bun", ["x", "@sentry/mcp-server"]),
+        ("bunx", ["--bun", "@sentry/mcp-server"]),
+        ("npm", ["exec", "@sentry/mcp-server"]),
+        ("pnpm", ["dlx", "@sentry/mcp-server"]),
+    ],
+)
+def test_a_server_config_is_read_as_running_a_package(
+    command: str, args: list[str]
+) -> None:
+    """A config names its runner in "command" and its package in "args"."""
+    config = {"mcpServers": {"sentry-mcp": {"command": command, "args": args}}}
+    assert _floating_specs("mcp.json", json.dumps(config)), (command, args)
+
+
+def test_a_pinned_server_config_is_not_reported_as_floating() -> None:
+    """The config path reads a pin as a pin too."""
+    config = {
+        "mcpServers": {
+            "sentry-mcp": {"command": "bunx", "args": ["@sentry/mcp-server@0.49.0"]}
+        }
+    }
+    assert not _floating_specs("mcp.json", json.dumps(config))
+
+
+def test_no_repo_owned_file_resolves_a_package_at_latest() -> None:
+    """No file this repo owns may resolve a package at its newest version.
+
+    A floating spec runs whatever the index published when the command ran —
+    with the developer's environment in scope. Pin it, or do not run it.
+    """
+    offenders = [
+        f"{rel}: {spec}"
+        for rel, text in _repo_owned_text_files()
+        for spec in _floating_specs(rel, text)
+    ]
+    assert not offenders, "packages resolved at latest: " + "; ".join(offenders)
+
+
+def test_platform_owned_files_resolve_no_unrecorded_package_at_latest() -> None:
+    """The platform's own files may not carry an unrecorded floating spec.
+
+    The repo cannot pin what the platform's setup template writes, so the specs
+    that still float there are recorded in PLATFORM_OWNED_FLOATING_SPECS, each
+    with the route that fixes it. A spec that is not on that list is not a
+    recorded defect: it fails here.
+    """
+    offenders = [
+        f"{rel}: {spec}"
+        for rel, text in _text_files(platform_owned=True)
+        for spec in _floating_specs(rel, text)
+        if (rel, spec) not in PLATFORM_OWNED_FLOATING_SPECS
+    ]
+    assert not offenders, (
+        "packages resolved at latest in platform-owned files: " + "; ".join(offenders)
+    )
+
+
+def test_the_scan_reads_every_platform_owned_file() -> None:
+    """The platform-owned gate is only as good as the files it read.
+
+    A renamed or missing platform file leaves the offender list empty and the
+    gate green, so the scan must prove it read every one of them.
+    """
+    scanned = {rel for rel, _ in _text_files(platform_owned=True)}
+    missing = sorted(PLATFORM_OWNED_FILES - scanned)
+    assert not missing, "platform-owned files not scanned: " + ", ".join(missing)
+
+
+def test_every_recorded_floating_spec_is_live_and_routed() -> None:
+    """A recorded defect must still be there, and must say who fixes it.
+
+    The repo cannot pin what the platform's setup template writes, so the record
+    is the only handle on it — and a record that lies is worse than no record:
+    an entry the platform has already fixed is stale and must be dropped, and
+    an entry without an owner and a route is a defect nobody can act on.
+    """
+    floating = {
+        rel: set(_floating_specs(rel, text))
+        for rel, text in _text_files(platform_owned=True)
+    }
+    stale = [
+        f"{rel}: {spec}"
+        for (rel, spec) in PLATFORM_OWNED_FLOATING_SPECS
+        if spec not in floating.get(rel, set())
+    ]
+    assert not stale, (
+        "recorded defects the platform has since fixed — drop the entry: "
+        + "; ".join(stale)
+    )
+    unrouted = [
+        f"{rel}: {spec}"
+        for (rel, spec), record in PLATFORM_OWNED_FLOATING_SPECS.items()
+        if not record.get("owner", "").strip()
+        or not record.get("route", "").strip()
+    ]
+    assert not unrouted, (
+        "recorded defects without an owner and a route: " + "; ".join(unrouted)
+    )
+
+
+def test_repo_owned_copies_of_the_gate_pytest_use_the_gates_pin() -> None:
+    """A copy of the gate's tools-pytest command must name the gate's pin.
+
+    The gate runs one pytest version; a doc that tells a reviewer to run
+    another is not the gate, and a copy that floats is worse — it resolves the
+    newest release at run time.
+    """
+    gate = GATE_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?pytest==(\d+\.\d+\.\d+)", gate
+    )
+    assert match, "bin/check runs an unpinned --with pytest"
+    gate_pin = match.group(1)
+    offenders = [
+        f"{rel}: pytest=={quoted}"
+        for rel, text in _repo_owned_text_files()
+        for quoted in re.findall(
+            r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?pytest==([\d.]+)", text
+        )
+        if quoted != gate_pin
+    ]
+    assert not offenders, (
+        f"copies of the gate's pytest pin disagree with bin/check's {gate_pin}: "
+        + "; ".join(offenders)
+    )
+
+
+# ── bin/check's exit-code contract, run with a stubbed uv ──────────────────────
+
+# The 75/1 classification is a behavior of the script, not of its text: reverting
+# step() to a bare `&&` chain, or widening the network-phrase grep, leaves every
+# content-pinning test above green while misgrading failures. These tests run the
+# gate itself against a stub `uv` — every step starts with `uv run`, so one stub
+# scripts each scenario with no install and no network. The stub owns `$HOME`:
+# the gate prepends `$HOME/.local/bin` to PATH itself, so stubbing the inherited
+# PATH alone is shadowed by any real uv installed there.
+
+_STUB_UV = """\
+#!/usr/bin/env bash
+printf '%s\\n' "$STUB_UV_SAYS"
+exit "${STUB_UV_EXIT:-0}"
+"""
+
+needs_bash = pytest.mark.skipif(
+    shutil.which("bash") is None, reason="bin/check is a bash script"
+)
+
+
+def _run_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    says: str = "",
+    exits: int = 0,
+    stubs: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    stub_dir = tmp_path / "home" / ".local" / "bin"
+    _write(stub_dir / "uv", _STUB_UV).chmod(0o755)
+    for name, body in (stubs or {}).items():
+        _write(stub_dir / name, body).chmod(0o755)
+    monkeypatch.setenv("HOME", str(stub_dir.parent.parent))
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("STUB_UV_SAYS", says)
+    monkeypatch.setenv("STUB_UV_EXIT", str(exits))
+    # The gate cds to the repo root itself; the stub shadows only `uv` (plus any
+    # named `stubs`), so git, grep and the rest resolve normally and the
+    # hook-mode precondition holds unless a test stubs git to break it.
+    return subprocess.run(
+        [shutil.which("bash") or "bash", str(GATE_SCRIPT)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def _run_gate_with_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tools: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run the gate with a PATH holding only `tools` (name -> script body) and
+    `dirname`, which the gate needs to cd before its tool preconditions."""
+    # Resolved before PATH is narrowed below.
+    bash = shutil.which("bash")
+    assert bash
+    bin_dir = tmp_path / "only-bin"
+    bin_dir.mkdir()
+    dirname = shutil.which("dirname")
+    assert dirname, "dirname is needed to run bin/check"
+    (bin_dir / "dirname").symlink_to(dirname)
+    for name, body in tools.items():
+        _write(bin_dir / name, body).chmod(0o755)
+    # An empty HOME: the gate prepends $HOME/.local/bin, where a real uv lives.
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    monkeypatch.setenv("PATH", str(bin_dir))
+    return subprocess.run(
+        [bash, str(GATE_SCRIPT)], capture_output=True, text=True, timeout=120
+    )
+
+
+@needs_bash
+def test_bin_check_exit_75_when_a_step_cannot_reach_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Index-unreachable output grades as the environment (75), never as red."""
+    proc = _run_gate(
+        tmp_path,
+        monkeypatch,
+        says="warning: failed to fetch https://pypi.org/simple/pip/",
+        exits=1,
+    )
+    assert proc.returncode == 75, proc.stderr
+    assert "could not reach the package index" in proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_1_on_a_plain_red_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure with no network phrase is a red change (1), not environment (75)."""
+    proc = _run_gate(
+        tmp_path, monkeypatch, says="ERROR: 2 failed, 42 passed in 0.31s", exits=1
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "the change is red" in proc.stderr
+
+
+@needs_bash
+def test_bin_check_echoes_step_output_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On success each step's captured output is echoed, so a proof is reproducible."""
+    proc = _run_gate(
+        tmp_path, monkeypatch, says="knowledge base clean (stubbed)", exits=0
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "knowledge base clean (stubbed)" in proc.stdout
+    # Derived from the projects on disk, not today's step count: two repo-wide
+    # steps, then one ruff and one pytest step per gated project.
+    expected = ["rx knowledge base", "tools tests"] + [
+        f"{project[:3]} {check}" for project in GATED_PROJECTS for check in ("ruff", "pytest")
+    ]
+    ran = [ln[len("==> ") :] for ln in proc.stderr.splitlines() if ln.startswith("==> ")]
+    assert ran == expected, proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_75_when_uv_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No uv on PATH is the environment (75): the gate refuses to grade."""
+    proc = _run_gate_with_only(tmp_path, monkeypatch, {"git": "#!/bin/sh\nexit 0\n"})
+    assert proc.returncode == 75, proc.stderr
+    assert "uv not found on PATH" in proc.stderr
+    assert "==> " not in proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_75_when_git_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No git on PATH is the environment (75), not a red change."""
+    proc = _run_gate_with_only(tmp_path, monkeypatch, {"uv": _STUB_UV})
+    assert proc.returncode == 75, proc.stderr
+    assert "git not found on PATH" in proc.stderr
+    assert "==> " not in proc.stderr
+
+
+@needs_bash
+def test_bin_check_exit_1_when_the_hook_is_not_executable_in_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hook git records as 100644 is silently skipped: the gate grades it red (1)."""
+    stub_git = (
+        "#!/usr/bin/env bash\n"
+        "printf '100644 0000000000000000000000000000000000000000 0\\t.githooks/pre-commit\\n'\n"
+    )
+    proc = _run_gate(tmp_path, monkeypatch, stubs={"git": stub_git})
+    assert proc.returncode == 1, proc.stderr
+    assert ".githooks/pre-commit is mode '100644'" in proc.stderr
+    assert "==> " not in proc.stderr
 
 
 # ── scaffolding: cmd_new_project renders a project that boots ─────────────────
@@ -1235,77 +2066,51 @@ def test_help_lists_the_test_command(capsys: pytest.CaptureFixture[str]) -> None
     assert any(line.strip().startswith("test ") for line in out.splitlines())
 
 
-# ── bin/check: the shim over the canonical command ─────────────────────────────
+# ── bin/check: the canonical check is its first step ──────────────────────────
 
-_CHECK_PATH = _RX_PATH.parent.parent / "bin" / "check"
+# Where main's bin/check was a shim that only ever forwarded to the canonical
+# `uv run tools/rx.py check`, the merged bin/check is the gate whose FIRST step
+# is that same canonical command, followed by the pinned tools suite and every
+# project's ruff + pytest — one canonical command, one implementation of "is
+# this tree green?". The shim's forwarding survives as the gate's first step;
+# what does not survive is its no-uv fallback: without uv the gate refuses to
+# grade (exit 75, the documented contract in
+# .claude/skills/verify-change/SKILL.md) instead of silently grading on
+# whatever interpreter it happens to run under. The child's exit code still
+# decides the verdict — a red step is exit 1 — and a gate that cannot even
+# start is never a silent zero: missing uv or git is exit 75. All three are
+# pinned by the exit-code tests above; this section pins the surviving step.
+
+_RECORDING_UV = """\
+#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$STUB_UV_LOG"
+exit "${STUB_UV_EXIT:-0}"
+"""
 
 
-def _load_check() -> ModuleType:
-    """Load bin/check as a module — the file has no .py suffix, so the loader is explicit."""
-    loader = importlib.machinery.SourceFileLoader("bin_check_under_test", str(_CHECK_PATH))
-    spec = importlib.util.spec_from_file_location(
-        "bin_check_under_test", _CHECK_PATH, loader=loader)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_bin_check_forwards_to_the_canonical_check(
-    monkeypatch: pytest.MonkeyPatch,
+@needs_bash
+def test_bin_check_starts_from_the_canonical_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """bin/check is a shim: it forwards to `uv run tools/rx.py check` and adds nothing."""
-    check = _load_check()
-    calls: list[list[str]] = []
+    """The gate's first uv command is the canonical check, spelled in full.
 
-    def fake_call(command, **kwargs):
-        calls.append(list(command))
-        return 0
-
-    monkeypatch.setattr(check.shutil, "which", lambda name: "/usr/local/bin/uv")
-    monkeypatch.setattr(check.subprocess, "call", fake_call)
-    assert check.main(["--no-tests"]) == 0
-    assert calls == [["uv", "run", str(_CHECK_PATH.parent.parent / "tools" / "rx.py"),
-                      "check", "--no-tests"]]
-
-
-def test_bin_check_returns_the_child_exit_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The shim hands back the child's exit code: a red check is a red bin/check."""
-    check = _load_check()
-    monkeypatch.setattr(check.shutil, "which", lambda name: "/usr/local/bin/uv")
-    monkeypatch.setattr(check.subprocess, "call", lambda command, **kwargs: 3)
-    assert check.main([]) == 3
-
-
-def test_bin_check_falls_back_to_this_interpreter_without_uv(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Without uv on PATH the shim still runs the same check, on this interpreter."""
-    check = _load_check()
-    calls: list[list[str]] = []
-
-    def fake_call(command, **kwargs):
-        calls.append(list(command))
-        return 0
-
-    monkeypatch.setattr(check.shutil, "which", lambda name: None)
-    monkeypatch.setattr(check.subprocess, "call", fake_call)
-    assert check.main([]) == 0
-    assert calls == [[sys.executable, str(_CHECK_PATH.parent.parent / "tools" / "rx.py"),
-                      "check"]]
-
-
-def test_bin_check_returns_one_when_the_check_cannot_start(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A check that cannot start is a failure, never a silent zero."""
-    check = _load_check()
-
-    def boom(command, **kwargs):
-        raise OSError("no such file or directory")
-
-    monkeypatch.setattr(check.shutil, "which", lambda name: "/usr/local/bin/uv")
-    monkeypatch.setattr(check.subprocess, "call", boom)
-    assert check.main([]) == 1
+    Whatever else the gate grows, it must start at ``uv run tools/rx.py
+    check`` — a gate that stops running the canonical command first has forked
+    "is this tree green?" into two implementations again, the exact defect
+    main's shim existed to prevent. The stub records the argv of every ``uv``
+    the gate starts, so the first recorded line is the gate's opening move.
+    """
+    stub_dir = tmp_path / "home" / ".local" / "bin"
+    _write(stub_dir / "uv", _RECORDING_UV).chmod(0o755)
+    log = stub_dir.parent.parent / "uv-argv.log"
+    monkeypatch.setenv("HOME", str(stub_dir.parent.parent))
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("STUB_UV_LOG", str(log))
+    proc = subprocess.run(
+        [shutil.which("bash") or "bash", str(GATE_SCRIPT)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text(encoding="utf-8").splitlines()[0] == "run tools/rx.py check"
