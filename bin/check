@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Thin shim over the canonical check command.
+
+The canonical command is ``uv run tools/rx.py check`` — the knowledge-base
+lint followed by the repo's test suites. This file forwards to it and does nothing
+else, so there is one implementation of "is this tree green?", not two.
+
+    python bin/check             # any platform
+    ./bin/check                  # POSIX
+    python bin/check --no-tests  # lint only, no test suites
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+RX = ROOT / "tools" / "rx.py"
+
+
+def main(argv: list[str]) -> int:
+    """Run the canonical check and return its exit code."""
+    if shutil.which("uv"):
+        command = ["uv", "run", str(RX), "check", *argv]
+    else:
+        command = [sys.executable, str(RX), "check", *argv]
+    try:
+        return subprocess.call(command, cwd=str(ROOT))
+    except OSError as exc:
+        print(f"error: could not run the check: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

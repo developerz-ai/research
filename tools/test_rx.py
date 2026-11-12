@@ -6,7 +6,11 @@ configuration, and until now no test pinned it: deleting ``_check_dependency_upd
 and ``_lock_divergences`` outright would leave the suite green. These tests drive the
 validation against a synthetic tree so each failure mode is asserted separately.
 
-The scaffold tests at the end drive ``cmd_new_project`` against the real
+The harness tests pin ``rx test`` and the suites inside ``rx check``. The runner is
+faked, so no test spawns a real pytest and none of them reach the network. The
+``bin/check`` shim is loaded by path, and the process it starts is faked too.
+
+The scaffold tests drive ``cmd_new_project`` against the real
 ``templates/`` directory, so template drift fails here instead of at the next
 project's creation.
 
@@ -18,14 +22,17 @@ Run from the repo root:
 from __future__ import annotations
 
 import ast
+import importlib.machinery
 import importlib.util
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
+from types import ModuleType
 
 import pytest
 
@@ -836,3 +843,469 @@ def test_scaffold_run_record_concurrent_writers(
     record = provenance.load(path)
     assert record["seed"] == winners[0]
     assert record["items"] == [{"seed": winners[0]}]
+
+
+# ── the test harness: `rx test`, and the suites inside `rx check` ───────────────
+
+DEMO_TEST = "def test_demo():\n    assert True\n"
+
+
+class _Proc:
+    """The shape of a finished child process."""
+
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class FakeRunner:
+    """Stands in for ``subprocess.run``: records the commands, answers with verdicts.
+
+    No test here may spawn a real pytest or reach the network, so every child
+    process the harness starts is answered by this fake.
+    """
+
+    def __init__(
+        self,
+        *,
+        returncode: int = 0,
+        stdout: str = "1 passed in 0.01s",
+        stderr: str = "",
+        raises: bool = False,
+    ) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.raises = raises
+        self.commands: list[list[str]] = []
+        self.cwds: list[str | None] = []
+        self.envs: list[dict[str, str]] = []
+
+    def __call__(self, command, **kwargs):
+        self.commands.append(list(command))
+        self.cwds.append(kwargs.get("cwd"))
+        self.envs.append(kwargs.get("env") or {})
+        if "--help" in command:
+            # the uv capability probe, not a test run
+            return _Proc(0, stdout="      --isolated\n")
+        if self.raises:
+            raise OSError("no such file or directory")
+        return _Proc(self.returncode, self.stdout, self.stderr)
+
+    def pytest_commands(self) -> list[list[str]]:
+        """The commands meant to run pytest, not the uv capability probe."""
+        return [c for c in self.commands if "pytest" in c]
+
+
+class _MissingPytestRunner(FakeRunner):
+    """The project's venv has no pytest: the probe says so, everything else is green."""
+
+    def __call__(self, command, **kwargs):
+        if command[1:2] == ["-c"]:
+            self.commands.append(list(command))
+            self.cwds.append(kwargs.get("cwd"))
+            self.envs.append(kwargs.get("env") or {})
+            return _Proc(1, stderr="No module named pytest")
+        return super().__call__(command, **kwargs)
+
+
+class _TimeoutRunner(FakeRunner):
+    """Every child process but the uv capability probe times out."""
+
+    def __call__(self, command, **kwargs):
+        if "--help" in command:
+            return super().__call__(command, **kwargs)
+        self.commands.append(list(command))
+        self.cwds.append(kwargs.get("cwd"))
+        self.envs.append(kwargs.get("env") or {})
+        raise subprocess.TimeoutExpired(cmd=list(command), timeout=1800)
+
+
+class _NoPytest:
+    """Stands in for ``importlib.util`` in rx's namespace: pytest is not here."""
+
+    class util:  # noqa: N801 - the stdlib name rx.py reaches for
+        @staticmethod
+        def find_spec(name: str):
+            return None
+
+
+@pytest.fixture
+def harness_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A synthetic repo root: a root suite, one synced project, one unsynced.
+
+    The root suite runs, the synced project's suite runs, and the project with
+    no .venv is reported SKIPPED. Nothing here touches the real projects/.
+    """
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx, "LIBRARY", tmp_path / "library")
+    monkeypatch.setattr(rx, "ARTICLES", tmp_path / "articles")
+    monkeypatch.setattr(rx, "_UV_ISOLATED", None)
+    _write(tmp_path / "tools" / "test_demo.py", DEMO_TEST)
+    _write(tmp_path / "projects" / "002-synced" / "tests" / "test_demo.py", DEMO_TEST)
+    _write(tmp_path / "projects" / "002-synced" / ".venv" / "bin" / "python", "")
+    _write(tmp_path / "projects" / "001-unsynced" / "tests" / "test_demo.py", DEMO_TEST)
+    return tmp_path
+
+
+def _fake_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend uv is on PATH: the harness then drives pytest through it."""
+    monkeypatch.setattr(rx.shutil, "which", lambda name: "/usr/local/bin/uv")
+
+
+def test_rx_test_runs_the_root_suite_and_exits_zero(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The happy path: the root suite runs, its verdict is printed, the exit code is 0."""
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 0
+    out = capsys.readouterr().out
+    assert "PASS" in out
+    assert "root" in out
+    assert "tools/test_demo.py" in out
+    assert "1 passed in 0.01s" in out
+    assert runner.pytest_commands(), runner.commands
+
+
+def test_rx_test_fails_and_names_the_suite_when_a_suite_fails(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A red suite is a red run, and the summary says which suite was red."""
+    runner = FakeRunner(returncode=1, stdout="1 failed in 0.01s")
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "root" in out
+    assert "pytest exit 1" in out
+    assert "1 failed in 0.01s" in out
+
+
+def test_a_project_without_a_synced_venv_is_reported_skipped(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No .venv means the project's tests never ran: SKIPPED with a remedy, not a pass."""
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 0
+    out = capsys.readouterr().out
+    assert "SKIP" in out
+    assert "001-unsynced" in out
+    assert "uv sync --extra dev" in out
+    # the unsynced project was never started
+    assert not any(cwd and cwd.endswith("001-unsynced") for cwd in runner.cwds)
+
+
+def test_a_project_venv_without_an_interpreter_is_reported_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A .venv with no interpreter never ran anything: SKIPPED with the remedy."""
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    _write(tmp_path / "tools" / "test_demo.py", DEMO_TEST)
+    _write(tmp_path / "projects" / "003-nointerp" / "tests" / "test_demo.py", DEMO_TEST)
+    (tmp_path / "projects" / "003-nointerp" / ".venv").mkdir(parents=True)
+    runner = FakeRunner()
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 0
+    out = capsys.readouterr().out
+    assert "SKIP" in out
+    assert "003-nointerp" in out
+    assert "uv sync --extra dev" in out
+
+
+def test_a_synced_project_runs_its_own_suite_with_its_own_interpreter(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A project with a synced .venv runs its suite on that venv's interpreter."""
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 0
+    out = capsys.readouterr().out
+    assert "002-synced" in out
+    project_calls = [
+        command for command, cwd in zip(runner.commands, runner.cwds)
+        if cwd and cwd.endswith("002-synced")
+    ]
+    assert project_calls, runner.commands
+    assert project_calls[0][0].endswith("python")
+    assert project_calls[0][1:3] == ["-m", "pytest"]
+
+
+def test_a_project_venv_without_pytest_fails_with_the_remedy(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A venv synced without the dev extra is an environment gap, named as one.
+
+    The suite run on such a venv exits 1 on "No module named pytest", which the
+    report would call a failed test — no cause, no remedy. It is a missing
+    dependency in the project's environment: FAIL, with the remedy.
+    """
+    runner = _MissingPytestRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "002-synced" in out
+    assert "pytest is not installed" in out
+    assert "uv sync --extra dev" in out
+    # the raw interpreter error is not what the report leads with
+    assert "No module named pytest" not in out
+    # and the project's suite was never started
+    assert not any(cwd and cwd.endswith("002-synced") for cwd in runner.cwds)
+
+
+def test_pytest_exit_5_is_a_failure_not_a_pass(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """pytest exits 5 when it collected nothing: that is a failure, never a pass."""
+    runner = FakeRunner(returncode=5, stdout="no tests ran in 0.01s")
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "no tests collected" in out
+    assert "PASS" not in out
+
+
+def test_a_suite_that_cannot_start_is_a_failure(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A suite that could not be started is a loud failure, never a silent pass."""
+    runner = FakeRunner(raises=True)
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "could not start" in out
+
+
+def test_a_suite_that_times_out_is_a_failure(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A suite that never finishes is a failure, not a pass."""
+    runner = _TimeoutRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "timed out" in out
+
+
+def test_rx_test_fails_when_the_root_suite_has_no_test_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No test file means nothing was tested: the run fails rather than passes."""
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "no test files found" in out
+
+
+def test_the_root_suite_runs_through_uv_without_touching_the_outer_venv(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inner run may not sync or modify the environment rx.py itself runs in."""
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    monkeypatch.setenv("VIRTUAL_ENV", "/tmp/outer-ephemeral-env")
+    assert rx.main(["test"]) == 0
+    commands = runner.pytest_commands()
+    assert commands, runner.commands
+    command = commands[0]
+    assert command[:2] == ["uv", "run"]
+    assert "--with" in command and "pytest" in command
+    assert "tools/test_demo.py" in command
+    # the child inherits no virtualenv, so it cannot touch the outer one
+    assert all("VIRTUAL_ENV" not in env for env in runner.envs)
+
+
+def test_the_root_suite_falls_back_to_this_interpreter_without_uv(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without uv on PATH the suite runs on this interpreter — pytest is not imported."""
+    runner = FakeRunner()
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 0
+    commands = runner.pytest_commands()
+    assert commands, runner.commands
+    assert commands[0][:3] == [sys.executable, "-m", "pytest"]
+
+
+def test_the_root_suite_without_pytest_in_this_interpreter_fails_with_the_remedy(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No uv and no pytest here: the run fails and says how to fix it."""
+    monkeypatch.setattr(rx.shutil, "which", lambda name: None)
+    monkeypatch.setattr(rx, "importlib", _NoPytest)
+    runner = FakeRunner()
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["test"]) == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "pytest is not installed in this interpreter" in out
+    assert "uv run --with pytest pytest" in out
+    # the gap was found before the run, so the root suite was never started
+    assert str(harness_tree) not in runner.cwds
+
+
+def test_rx_check_runs_the_suites_and_fails_on_a_red_suite(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`rx check` runs the suites after the lint: a red suite is a red check."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda: [])
+    runner = FakeRunner(returncode=1, stdout="1 failed in 0.01s")
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["check"]) == 1
+    out = capsys.readouterr().out
+    assert "knowledge base clean" in out
+    assert "FAIL" in out
+    assert "root" in out
+    assert runner.pytest_commands(), runner.commands
+
+
+def test_rx_check_is_green_when_the_lint_and_the_suites_pass(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The whole check — lint and suites — is one exit code."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda: [])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["check"]) == 0
+    out = capsys.readouterr().out
+    assert "knowledge base clean" in out
+    assert "PASS" in out
+
+
+def test_rx_check_still_fails_on_a_knowledge_base_problem(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The lint still has teeth: a knowledge-base problem fails the check."""
+    monkeypatch.setattr(
+        rx, "_knowledge_base_problems", lambda: ["library/x.md: dangling link [[y]]"])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["check"]) == 1
+    out = capsys.readouterr().out
+    assert "dangling link" in out
+
+
+def test_rx_check_no_tests_skips_the_suites(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`rx check --no-tests` is the fast lint: no suite is started."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda: [])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    assert rx.main(["check", "--no-tests"]) == 0
+    out = capsys.readouterr().out
+    assert "--no-tests" in out
+    assert runner.commands == []
+
+
+def test_rx_never_imports_pytest() -> None:
+    """rx.py stays stdlib-only: pytest is spawned in a child, never imported."""
+    source = _RX_PATH.read_text(encoding="utf-8")
+    assert not re.search(r"^\s*(import pytest|from pytest)", source, re.M)
+
+
+def test_help_lists_the_test_command(capsys: pytest.CaptureFixture[str]) -> None:
+    """`rx help` is the catalog: the new command has to be in it."""
+    assert "test" in rx.COMMANDS
+    assert rx.main(["help"]) == 0
+    out = capsys.readouterr().out
+    assert any(line.strip().startswith("test ") for line in out.splitlines())
+
+
+# ── bin/check: the shim over the canonical command ─────────────────────────────
+
+_CHECK_PATH = _RX_PATH.parent.parent / "bin" / "check"
+
+
+def _load_check() -> ModuleType:
+    """Load bin/check as a module — the file has no .py suffix, so the loader is explicit."""
+    loader = importlib.machinery.SourceFileLoader("bin_check_under_test", str(_CHECK_PATH))
+    spec = importlib.util.spec_from_file_location(
+        "bin_check_under_test", _CHECK_PATH, loader=loader)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_bin_check_forwards_to_the_canonical_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bin/check is a shim: it forwards to `uv run tools/rx.py check` and adds nothing."""
+    check = _load_check()
+    calls: list[list[str]] = []
+
+    def fake_call(command, **kwargs):
+        calls.append(list(command))
+        return 0
+
+    monkeypatch.setattr(check.shutil, "which", lambda name: "/usr/local/bin/uv")
+    monkeypatch.setattr(check.subprocess, "call", fake_call)
+    assert check.main(["--no-tests"]) == 0
+    assert calls == [["uv", "run", str(_CHECK_PATH.parent.parent / "tools" / "rx.py"),
+                      "check", "--no-tests"]]
+
+
+def test_bin_check_returns_the_child_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shim hands back the child's exit code: a red check is a red bin/check."""
+    check = _load_check()
+    monkeypatch.setattr(check.shutil, "which", lambda name: "/usr/local/bin/uv")
+    monkeypatch.setattr(check.subprocess, "call", lambda command, **kwargs: 3)
+    assert check.main([]) == 3
+
+
+def test_bin_check_falls_back_to_this_interpreter_without_uv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without uv on PATH the shim still runs the same check, on this interpreter."""
+    check = _load_check()
+    calls: list[list[str]] = []
+
+    def fake_call(command, **kwargs):
+        calls.append(list(command))
+        return 0
+
+    monkeypatch.setattr(check.shutil, "which", lambda name: None)
+    monkeypatch.setattr(check.subprocess, "call", fake_call)
+    assert check.main([]) == 0
+    assert calls == [[sys.executable, str(_CHECK_PATH.parent.parent / "tools" / "rx.py"),
+                      "check"]]
+
+
+def test_bin_check_returns_one_when_the_check_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A check that cannot start is a failure, never a silent zero."""
+    check = _load_check()
+
+    def boom(command, **kwargs):
+        raise OSError("no such file or directory")
+
+    monkeypatch.setattr(check.shutil, "which", lambda name: "/usr/local/bin/uv")
+    monkeypatch.setattr(check.subprocess, "call", boom)
+    assert check.main([]) == 1

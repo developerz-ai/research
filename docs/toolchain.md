@@ -97,6 +97,38 @@ updater's reach. It also enforces the two ways that guarantee can rot:
   extras — and names what moved. The remedy for every divergence is the same: run
   `uv lock` and commit the regenerated file.
 
+## Tests
+
+The root suite is `tools/test_rx.py`: pytest, stdlib-only, offline. It pins the repo's own
+guards — the dependency-update linter, the scaffold validator, the test harness —
+so a broken guard fails a test instead of passing silently.
+
+```bash
+uv run --with pytest pytest tools/test_rx.py -q   # the root suite, directly
+uv run tools/rx.py test                           # the harness: root suite + every project
+uv run tools/rx.py check                          # the lint, then the same suites
+./bin/check                                       # shim over `uv run tools/rx.py check` (Windows: python bin/check)
+```
+
+`rx test` runs:
+
+- the **root suite** — `tools/test_*.py` — always;
+- each **project suite** — `projects/*/tests/test_*.py` — but only when that project
+  has a **synced `.venv`**.
+
+A project without a synced `.venv` is reported **SKIPPED**, with the remedy
+(`uv sync --extra dev`). A skip is neither a pass nor a failure: that project's tests
+never ran, so nothing is claimed about them — say so instead of reporting green.
+A suite that fails fails the run, and so does pytest's exit code 5 ("no tests collected"):
+an empty suite is a hole in the guard, not a clean bill of health.
+
+`rx.py` stays stdlib-only and imports no third-party package. pytest is spawned in a
+child process — `uv run --isolated --with pytest pytest ...` when the installed uv
+understands `--isolated` (the flag is added only when `uv run --help` lists it),
+otherwise `uv run --with pytest pytest ...`, falling back to `python -m pytest` when uv
+is not on PATH — with `VIRTUAL_ENV` stripped, so the child never modifies the
+ephemeral environment `rx.py` itself runs in.
+
 ## PyTorch and CUDA
 
 You do not need the CUDA Toolkit installed. PyTorch wheels ship their own CUDA runtime;

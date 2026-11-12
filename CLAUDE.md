@@ -103,7 +103,7 @@ thread and decide what is true; the hive does the work.
 **1. Find out where it's at — before proposing anything.**
 ```bash
 uv run tools/rx.py status NNN     # readiness, experiment states, orphan results, claims
-uv run tools/rx.py check          # dangling links, untagged notes, incomplete run records, dependency-update config (uv-managed project + committed uv.lock + "uv" ecosystem)
+uv run tools/rx.py check          # knowledge-base lint (dangling links, untagged notes, run records, dependency-update config), then the test suites — a red suite is a red check
 uv run tools/rx.py leads          # the discovery queue, ranked
 ```
 Then read that project's `CLAUDE.md` — its **Start here** section is the work queue, and its
@@ -142,6 +142,8 @@ uv run tools/rx.py help          # catalog of every command in the repo
 uv run tools/rx.py status NNN    # readiness + state of one project
 uv run tools/rx.py leads         # discovery queue: what is worth more research
 uv run tools/rx.py doctor        # hardware + backend report
+uv run tools/rx.py test          # the test suites: the root suite + every project with a synced .venv
+uv run tools/rx.py check         # the knowledge-base lint, then the same test suites
 uv run tools/rx.py new-project "slug"
 uv run tools/rx.py new source|idea|claim|experiment <slug>
 uv run tools/rx.py projects      # status of every project
@@ -171,6 +173,7 @@ Discover depth via `rx.py help` — do not memorise or duplicate the catalog her
 - **Paths: `pathlib.Path` only.** This repo runs on Windows *and* Linux; a hardcoded `/` breaks one of them and nobody tests the other.
 - **Seeds live in the config, not the code.** A seed baked into a source file cannot be swept, and a sweep is the only way to know if a result is real.
 - **Contamination check before any benchmark claim.** If the eval set predates the model's cutoff, assume it's in the training data until shown otherwise.
+- **A check that could not run the tests is not green.** `rx check` runs the test suites after the knowledge-base lint and exits non-zero if any suite fails. A suite that could not start because pytest is missing is a failure. A project whose `.venv` is missing — or exists but has no interpreter in it — is reported SKIPPED with the remedy `uv sync --extra dev`, and a SKIP still means those tests never ran: say so instead of reporting a green check.
 
 ## Writing style for notes
 - Markdown. Cross-link as `[[library/ideas/slug]]`. Link liberally; a dangling link marks work to do.
