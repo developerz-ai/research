@@ -28,12 +28,18 @@ Run the repo's own linter first and report what it says:
 
 ```bash
 PYTHONIOENCODING=utf-8 uv run tools/rx.py check
+PYTHONIOENCODING=utf-8 uv run tools/rx.py test   # the test suites on their own
 ```
 
 Then: dangling `[[links]]`, notes in `library/` with no evidence tag, `results/*.json`
 with no experiment doc referencing them, and dependency-update drift (a uv-managed project
 whose committed `uv.lock` is missing, or whose Dependabot entry names an ecosystem that
 cannot discover it).
+
+`rx check` runs the test suites after that lint, so its exit code covers both; run
+`rx test` when you want the suites on their own, without the lint. A red suite is a
+reportable finding for this agent: name the failing suite, its exit code and the
+failing test. Report it — never fix it.
 
 ## Rules
 

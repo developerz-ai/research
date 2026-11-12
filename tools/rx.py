@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import importlib.util
 import json
 import os
 import platform
@@ -27,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -124,7 +126,8 @@ def cmd_help(args: argparse.Namespace) -> int:
     for line in (
         "uv run tools/rx.py status NNN   where it is at, and whether it is ready",
         "uv run tools/rx.py leads        what is worth more research, ranked",
-        "uv run tools/rx.py check        knowledge base lint",
+        "uv run tools/rx.py check        knowledge base lint, then the test suites",
+        "uv run tools/rx.py test         the repo's test suites",
     ):
         print(f"    {line}")
     print()
@@ -994,8 +997,12 @@ def _check_dependency_updates(problems: list[str]) -> None:
             problems.append(f"{rel}/uv.lock: {divergence}")
 
 
-def cmd_check(args: argparse.Namespace) -> int:
-    """Lint the knowledge base and the dependency-update configuration."""
+def _knowledge_base_problems() -> list[str]:
+    """Everything the knowledge-base lint can complain about.
+
+    Split out of ``cmd_check`` so the check command — lint, then tests — can be
+    exercised without a whole repository behind it.
+    """
     problems: list[str] = []
     notes = list(LIBRARY.rglob("*.md")) + list(PROJECTS.rglob("notes/*.md")) + \
         list(PROJECTS.rglob("experiments/*.md"))
@@ -1069,6 +1076,12 @@ def cmd_check(args: argparse.Namespace) -> int:
                     f"{results.relative_to(ROOT).as_posix()}: run record missing '{field}'")
 
     _check_dependency_updates(problems)
+    return problems
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Lint the knowledge base and the dependency-update configuration, then run the tests."""
+    problems = _knowledge_base_problems()
 
     if problems:
         print()
@@ -1076,9 +1089,238 @@ def cmd_check(args: argparse.Namespace) -> int:
             print(f"  {yellow('warn')}  {p}")
         print()
         print(f"  {len(problems)} problem(s)")
-        return 1
-    print(green("  knowledge base clean"))
-    return 0
+    else:
+        print(green("  knowledge base clean"))
+
+    if getattr(args, "no_tests", False):
+        print(dim("  test suites skipped (--no-tests)"))
+        return 1 if problems else 0
+
+    print()
+    tests_ok = _run_suites_report()
+    return 0 if (not problems and tests_ok) else 1
+
+
+# ------------------------------------------------------------------ test harness
+
+_PYTEST_NO_TESTS = 5  # pytest's exit code when it collected nothing
+
+
+@dataclass
+class Suite:
+    """One pytest suite the harness may run."""
+
+    name: str
+    paths: list[str]          # pytest targets, relative to cwd
+    cwd: Path
+    command: list[str]        # empty when the suite cannot run
+    skip: str = ""            # non-empty => reported SKIPPED, never run
+    interpreter: str = ""     # the venv interpreter, when the suite runs on one
+
+
+@dataclass
+class SuiteResult:
+    """What happened to one suite."""
+
+    name: str
+    status: str               # PASS | FAIL | SKIP
+    files: str = ""
+    detail: str = ""
+    output: str = ""
+
+
+def _venv_python(venv: Path) -> Path | None:
+    """The interpreter inside a uv-created venv — POSIX and Windows layouts."""
+    for candidate in (venv / "bin" / "python", venv / "Scripts" / "python.exe"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _child_env() -> dict[str, str]:
+    """The environment a child pytest run sees.
+
+    `uv run tools/rx.py` puts this process in an ephemeral environment. The inner
+    run must not sync or modify it, so the child inherits no virtualenv at all.
+    """
+    env = dict(os.environ)
+    env.pop("VIRTUAL_ENV", None)
+    return env
+
+
+_UV_ISOLATED: bool | None = None
+
+
+def _uv_supports_isolated() -> bool:
+    """Whether the installed uv understands `uv run --isolated`."""
+    global _UV_ISOLATED
+    if _UV_ISOLATED is None:
+        try:
+            proc = subprocess.run(["uv", "run", "--help"], capture_output=True,
+                                  text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            _UV_ISOLATED = False
+        else:
+            _UV_ISOLATED = "--isolated" in (proc.stdout or "")
+    return _UV_ISOLATED
+
+
+def _pytest_command(paths: list[str]) -> list[str]:
+    """The command that runs pytest over `paths`.
+
+    uv first — it resolves pytest without touching this interpreter — and this
+    interpreter as the fallback. pytest is never imported here: rx.py is
+    stdlib-only and has to run from a bare checkout with no venv.
+    """
+    if shutil.which("uv"):
+        command = ["uv", "run"]
+        if _uv_supports_isolated():
+            command.append("--isolated")
+        command += ["--with", "pytest", "pytest", *paths, "-q"]
+        return command
+    return [sys.executable, "-m", "pytest", *paths, "-q"]
+
+
+def _pytest_importable() -> bool:
+    """Whether this interpreter can run pytest at all (found, never imported)."""
+    try:
+        return importlib.util.find_spec("pytest") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _venv_pytest_missing(python: str) -> bool:
+    """Whether that interpreter was asked and cannot import pytest.
+
+    A venv synced without the dev extra has no pytest: the suite run on it
+    exits 1 on "No module named pytest", and the report calls a missing
+    dependency a failed test. rx.py never imports pytest, so the question is put
+    to the child process.
+
+    A probe that could not start at all answers "no" — the suite run then
+    reports the real error instead of a guess.
+    """
+    try:
+        proc = subprocess.run([python, "-c", "import pytest"], env=_child_env(),
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode != 0
+
+
+def _root_suite() -> Suite:
+    """The repo's own suite: tools/test_*.py, run from the repo root."""
+    files = sorted((ROOT / "tools").glob("test_*.py"))
+    paths = [p.relative_to(ROOT).as_posix() for p in files]
+    return Suite(name="root", paths=paths, cwd=ROOT,
+                 command=_pytest_command(paths) if paths else [])
+
+
+def _project_suites() -> list[Suite]:
+    """One suite per project — run only when that project has a synced .venv."""
+    suites: list[Suite] = []
+    if not PROJECTS.is_dir():
+        return suites
+    for project in sorted(p for p in PROJECTS.iterdir()
+                          if p.is_dir() and not p.name.startswith(".")):
+        tests = sorted((project / "tests").glob("test_*.py"))
+        paths = [p.relative_to(project).as_posix() for p in tests]
+        venv = project / ".venv"
+        if not venv.is_dir():
+            suites.append(Suite(project.name, paths, project, [],
+                                "no synced .venv — remedy: uv sync --extra dev"))
+            continue
+        python = _venv_python(venv)
+        if python is None:
+            suites.append(Suite(project.name, paths, project, [],
+                                "broken .venv (no interpreter) — remedy: "
+                                "uv sync --extra dev"))
+            continue
+        suites.append(Suite(project.name, paths, project,
+                            [str(python), "-m", "pytest", *paths, "-q"],
+                            interpreter=str(python)))
+    return suites
+
+
+def _last_line(text: str) -> str:
+    rows = [r for r in text.splitlines() if r.strip()]
+    return rows[-1].strip() if rows else ""
+
+
+def _run_suite(suite: Suite) -> SuiteResult:
+    """Run one suite in a child process and read the verdict off its exit code."""
+    files = ", ".join(suite.paths)
+    if suite.skip:
+        return SuiteResult(suite.name, "SKIP", files, suite.skip)
+    if not suite.paths:
+        return SuiteResult(suite.name, "FAIL", files, "no test files found")
+    if suite.command and suite.command[0] == sys.executable and not _pytest_importable():
+        return SuiteResult(suite.name, "FAIL", files,
+                           "pytest is not installed in this interpreter — remedy: "
+                           "uv run --with pytest pytest")
+    if suite.interpreter and _venv_pytest_missing(suite.interpreter):
+        return SuiteResult(suite.name, "FAIL", files,
+                           "pytest is not installed in this project's .venv — "
+                           "remedy: uv sync --extra dev")
+    try:
+        proc = subprocess.run(suite.command, cwd=str(suite.cwd), env=_child_env(),
+                              capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        return SuiteResult(suite.name, "FAIL", files, "timed out after 30 minutes")
+    except OSError as exc:
+        return SuiteResult(suite.name, "FAIL", files, f"could not start: {exc}")
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode == 0:
+        return SuiteResult(suite.name, "PASS", files, _last_line(stdout or stderr))
+    if proc.returncode == _PYTEST_NO_TESTS:
+        return SuiteResult(suite.name, "FAIL", files,
+                           "pytest exit 5 — no tests collected", stdout + stderr)
+    return SuiteResult(suite.name, "FAIL", files, f"pytest exit {proc.returncode}",
+                       stdout + stderr)
+
+
+def _print_suite_results(results: list[SuiteResult]) -> None:
+    """One line per suite: what it was, what happened, and how to fix it."""
+    for r in results:
+        label = {"PASS": green("PASS"), "FAIL": red("FAIL")}.get(r.status, yellow("SKIP"))
+        parts = [f"  {label}  {r.name}"]
+        if r.files:
+            parts.append(dim(r.files))
+        if r.detail:
+            parts.append(red(r.detail) if r.status == "FAIL" else dim(r.detail))
+        print("  · ".join(parts))
+        if r.status == "FAIL":
+            for row in (r.output or "").splitlines()[-40:]:
+                print(f"        {row}")
+
+
+def _run_suites_report() -> bool:
+    """Run every suite and print the summary. True when everything that ran passed."""
+    results = [_run_suite(s) for s in [_root_suite(), *_project_suites()]]
+    print(bold("  test suites"))
+    _print_suite_results(results)
+    ran = [r for r in results if r.status != "SKIP"]
+    failed = [r for r in results if r.status == "FAIL"]
+    skipped = sum(1 for r in results if r.status == "SKIP")
+    print()
+    if not ran:
+        print(red("  no suite ran — nothing was tested"))
+        return False
+    if failed:
+        names = ", ".join(r.name for r in failed)
+        print(red(f"  {len(failed)} suite(s) failed: {names}"))
+        return False
+    print(green(f"  {len(ran)} suite(s) passed, {skipped} skipped"))
+    return True
+
+
+def cmd_test(args: argparse.Namespace) -> int:
+    """Run the repo's test suites: the root suite, and each synced project's."""
+    print()
+    ok = _run_suites_report()
+    print()
+    return 0 if ok else 1
 
 
 COMMANDS = {
@@ -1091,6 +1333,7 @@ COMMANDS = {
     "leads": cmd_leads,
     "status": cmd_status,
     "check": cmd_check,
+    "test": cmd_test,
 }
 
 
@@ -1109,7 +1352,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("help")
     sub.add_parser("doctor")
     sub.add_parser("projects")
-    sub.add_parser("check")
+    p_check = sub.add_parser("check")
+    p_check.add_argument("--no-tests", action="store_true",
+                         help="skip the test suites (fast lint only)")
+    sub.add_parser("test")
     sub.add_parser("ingest")
     sub.add_parser("leads")
 
