@@ -18,6 +18,7 @@ This is the weekly devops checkup: a grade of how this repository ships, on five
 2. **Secure.** What could leak, or run that nobody reviewed?
    - A secret, token, private key or `.env` value committed to the tree. Quote the key and path, never the secret's value.
    - Third-party CI steps and base images pinned to an immutable digest, not a moving tag.
+   - A package an index resolves at run time — a `bunx`/`npx`/`uvx`/`npm exec`/`uv run --with` spelling whose version is not an exact release — runs whatever the index published newest, with the developer's environment in scope. A partial version is not a pin: npm and bun both read `@1` as a range and serve the newest match. Quote the command and the file it sits in.
    - CI token permissions declared and narrow. A secret scan or dependency audit that exists and runs.
    - A service, port or bucket opened to everyone with no stated reason.
 3. **Fast.** How long does a change wait for its answer?

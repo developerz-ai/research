@@ -556,7 +556,9 @@ def test_bin_check_pins_the_tools_pytest() -> None:
     follows the projects' lock), not any exact number someone typed in.
     """
     gate = GATE_SCRIPT.read_text(encoding="utf-8")
-    match = re.search(r"--with 'pytest==(\d+\.\d+\.\d+)'", gate)
+    match = re.search(
+        r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?pytest==(\d+\.\d+\.\d+)", gate
+    )
     assert match, "bin/check runs an unpinned --with pytest"
     locked = {
         pkg["version"]
@@ -617,9 +619,9 @@ PLATFORM_OWNED_FLOATING_SPECS = {
         "owner": "the platform's setup template",
         "route": (
             "pin @sentry/mcp-server in .mcp.json's args to a FULL three-component "
-            "version — `bunx @sentry/mcp-server@0.49.0`: npm reads a partial "
-            "version as a range (`@1` is 1.x and serves the newest match), so "
-            "`@1` is not a pin; 0.49.0 was the registry's latest on 2026-11-12, "
+            "version — `bunx @sentry/mcp-server@0.49.0`: bun and npm both read a "
+            "partial version as a range (`@1` is 1.x and serves the newest match), "
+            "so `@1` is not a pin; 0.49.0 was the registry's latest on 2026-11-12, "
             "re-check registry.npmjs.org/@sentry/mcp-server/latest — it starts "
             "at every agent start with the developer's SENTRY_ACCESS_TOKEN and "
             "DEVELOPERZ_API_KEY in scope"
@@ -712,8 +714,12 @@ def _repo_owned_text_files() -> list[tuple[str, str]]:
     return _text_files(platform_owned=False)
 
 
-# `--with pytest` (no version) pulls whatever the index serves newest.
-_UNPINNED_WITH = re.compile(r"--with[ \t]+['\"]?([A-Za-z0-9_.\-=]+)")
+# `--with pytest` (no version) pulls whatever the index serves newest, and
+# `--with=pytest` is that same command in another spelling — uv accepts both,
+# so both are read.
+_UNPINNED_WITH = re.compile(
+    r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?([A-Za-z0-9_.\-=]+)"
+)
 
 # A runner executes the package it is handed and the index decides which
 # publish that is. The move hides behind several names: `bun x` is `bunx`,
@@ -728,8 +734,17 @@ _RUNNER_PATTERNS = (
     re.compile(r"\b(?:pnpm|npm|yarn)[ \t]+(?:dlx|exec)\b"),
     re.compile(r"\buv[ \t]+tool[ \t]+(?:run|install)\b"),
 )
-# Flags whose value IS the package: `uvx --from ruff==0.1.0 ruff`.
+# Flags whose value IS the package: `uvx --from ruff==0.1.0 ruff`,
+# `npm exec --package=@scope/pkg@1.2.3 -- cmd`. The value may be attached with
+# `=` or given as the next word, and npm may repeat the flag.
 _PACKAGE_FLAGS = frozenset({"--from", "--package", "--pkg"})
+# `-p` is the short spelling of `--package` for npm and bunx — both measured
+# in their own --help output — but for uvx it is `--python`, so it names the
+# package only for the runners that spell it that way. Reading it for uvx
+# would name a Python version a package.
+_NPM_SHORT_PACKAGE_FLAG = "-p"
+# The uv runners, whose `-p` is --python.
+_UV_RUNNERS = frozenset({"uv", "uvx"})
 # Punctuation prose leaves around a command: quotes, backticks, brackets.
 _PROSE_PUNCTUATION = "\"'`(),.;"
 # What a package spec looks like on a command line: an npm name — scoped or
@@ -756,14 +771,25 @@ def _package_token(word: str) -> str | None:
     return word if _PACKAGE_TOKEN.match(word) else None
 
 
-def _package_after_words(words: list[str], start: int) -> str | None:
-    """The package the words from `start` on name, or None.
+def _packages_after_words(
+    words: list[str], start: int, runner: str = ""
+) -> list[str]:
+    """The package specs the words from `start` on name.
 
     Flags are skipped — except the ones whose value IS the package
-    (`uvx --from pkg tool`). A word that is only punctuation the prose left
-    around the runner is skipped too; the first real word that names no
-    package ends the scan, so a config's own keys are never read as one.
+    (`uvx --from pkg tool`, `npm exec --package=pkg -- cmd`): their value may
+    be attached with `=` or given as the next word, and npm may repeat the
+    flag, so every value is read. A word that is only punctuation the prose
+    left around the runner is skipped too. Once a flag named the package, the
+    words after it are the command it runs, not another package; with no such
+    flag, the first real word that names a package is it — and the first real
+    word that names none ends the scan, so a config's own keys are never read
+    as one.
     """
+    package_flags = _PACKAGE_FLAGS
+    if runner.split(" ")[0] not in _UV_RUNNERS:
+        package_flags = package_flags | {_NPM_SHORT_PACKAGE_FLAG}
+    specs: list[str] = []
     index = start
     while index < len(words):
         word = words[index].strip(_PROSE_PUNCTUATION)
@@ -771,12 +797,27 @@ def _package_after_words(words: list[str], start: int) -> str | None:
             index += 1
             continue
         if word.startswith("-"):
-            if word in _PACKAGE_FLAGS and index + 1 < len(words):
-                return _package_token(words[index + 1])
+            flag, separator, value = word.partition("=")
+            if separator and flag in package_flags:
+                token = _package_token(value)
+                if token:
+                    specs.append(token)
+                index += 1
+                continue
+            if word in package_flags and index + 1 < len(words):
+                token = _package_token(words[index + 1])
+                if token:
+                    specs.append(token)
+                index += 2
+                continue
             index += 1
             continue
-        return _package_token(word)
-    return None
+        if not specs:
+            token = _package_token(word)
+            if token:
+                specs.append(token)
+        break
+    return specs
 
 
 def _runner_package_specs(data: object) -> list[tuple[str, str]]:
@@ -789,21 +830,21 @@ def _runner_package_specs(data: object) -> list[tuple[str, str]]:
             words = [a for a in args if isinstance(a, str)]
             name = Path(command).name
             if name in PACKAGE_RUNNERS:
-                package = _package_after_words(words, 0)
+                packages = _packages_after_words(words, 0, name)
                 runner = name
             elif name == "bun" and words[:1] == [BUN_LONG_FORM]:
-                package = _package_after_words(words, 1)
+                packages = _packages_after_words(words, 1, f"bun {BUN_LONG_FORM}")
                 runner = f"bun {BUN_LONG_FORM}"
             elif (
                 name in NPM_MANAGERS
                 and words[:1]
                 and words[0] in EXEC_COMMANDS
             ):
-                package = _package_after_words(words, 1)
+                packages = _packages_after_words(words, 1, f"{name} {words[0]}")
                 runner = f"{name} {words[0]}"
             else:
-                package, runner = None, name
-            if package:
+                packages, runner = [], name
+            for package in packages:
                 specs.append((runner, package))
         for value in data.values():
             specs.extend(_runner_package_specs(value))
@@ -819,9 +860,9 @@ def _text_package_specs(text: str) -> list[tuple[str, str]]:
     for pattern in _RUNNER_PATTERNS:
         for match in pattern.finditer(text):
             line = text[match.end():].split("\n", 1)[0]
-            package = _package_after_words(line.split(), 0)
-            if package:
-                specs.append((" ".join(match.group(0).split()), package))
+            runner = " ".join(match.group(0).split())
+            for package in _packages_after_words(line.split(), 0, runner):
+                specs.append((runner, package))
     return specs
 
 
@@ -895,6 +936,10 @@ _RUNNER_FORMS = [
     "uv tool run @sentry/mcp-server",
     "bunx --bun @sentry/mcp-server",
     "uvx --from @sentry/mcp-server tool",
+    "uvx --from=@sentry/mcp-server tool",
+    "npm exec --package=@sentry/mcp-server -- sentry-mcp",
+    "bunx --package=@sentry/mcp-server sentry-mcp",
+    "npx -p @sentry/mcp-server sentry-mcp",
 ]
 
 
@@ -913,11 +958,48 @@ def test_every_runner_spelling_is_read_as_a_floating_package(form: str) -> None:
         "uvx @sentry/mcp-server==0.49.0",
         "bunx --bun @sentry/mcp-server@0.49.0",
         "uvx --from @sentry/mcp-server==0.49.0 tool",
+        "uvx --from=ruff==0.1.0 ruff",
+        "npm exec --package=@sentry/mcp-server@0.49.0 -- sentry-mcp",
+        "npm exec --package=is-number@7.0.0 -- is-number",
     ],
 )
 def test_a_pinned_package_is_not_reported_as_floating(form: str) -> None:
     """A spec with an exact version is a pin — the gate must not cry wolf."""
     assert not _floating_specs("notes.md", form), form
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "uv run --with=pytest pytest -q",
+        "uv run --with='pytest' pytest -q",
+    ],
+)
+def test_the_equals_form_of_with_is_read_as_a_floating_package(form: str) -> None:
+    """`--with=pkg` resolves the newest publish, exactly like `--with pkg`.
+
+    The two spellings are the same command, and uv accepts both — a regex that
+    reads only the spaced one leaves the class an open door, and nothing else
+    in this suite would notice.
+    """
+    assert _floating_specs("notes.md", form), form
+
+
+def test_the_equals_form_of_with_with_a_pin_is_not_floating() -> None:
+    """`--with=pkg==1.2.3` names one publish — a pin, spelled with `=`."""
+    assert not _floating_specs("notes.md", "uv run --with=pytest==9.2.0 pytest -q")
+
+
+def test_an_inline_package_flag_names_the_package_not_the_command() -> None:
+    """`npm exec --package=pkg -- cmd` runs pkg; cmd is not the package.
+
+    Reading the command instead of the package would report the wrong spec —
+    and would report a pinned package as floating.
+    """
+    floating = _floating_specs(
+        "notes.md", "npm exec --package=@sentry/mcp-server -- sentry-mcp"
+    )
+    assert "npm exec @sentry/mcp-server" in floating, floating
 
 
 @pytest.mark.parametrize(
@@ -1079,13 +1161,17 @@ def test_repo_owned_copies_of_the_gate_pytest_use_the_gates_pin() -> None:
     newest release at run time.
     """
     gate = GATE_SCRIPT.read_text(encoding="utf-8")
-    match = re.search(r"--with 'pytest==(\d+\.\d+\.\d+)'", gate)
+    match = re.search(
+        r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?pytest==(\d+\.\d+\.\d+)", gate
+    )
     assert match, "bin/check runs an unpinned --with pytest"
     gate_pin = match.group(1)
     offenders = [
         f"{rel}: pytest=={quoted}"
         for rel, text in _repo_owned_text_files()
-        for quoted in re.findall(r"--with[ \t]+['\"]?pytest==([\d.]+)", text)
+        for quoted in re.findall(
+            r"--with(?:[ \t]+|[ \t]*=[ \t]*)['\"]?pytest==([\d.]+)", text
+        )
         if quoted != gate_pin
     ]
     assert not offenders, (
