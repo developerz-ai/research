@@ -1,0 +1,17 @@
+NOTICE
+
+The MIT License in LICENSE covers the original work in this repository:
+its code, tools, templates, documentation, notes and analysis.
+
+Material quoted or excerpted from third parties is not covered by the
+MIT License. This includes the content reproduced in the source notes
+under library/sources/: excerpts and quotations from a company website,
+a recorded video interview, an author's published preprints and public
+profiles, and a transcript of a conversation with an LLM assistant.
+That material remains the property of its respective authors and rights
+holders, and is included for the purposes of research, commentary and
+criticism. Any reuse of it is subject to the terms set by those owners,
+not by this repository's licence.
+
+The commentary and analysis written around those excerpts in this
+repository is original work and is covered by the MIT License.
