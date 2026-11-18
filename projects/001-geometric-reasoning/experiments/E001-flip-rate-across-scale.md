@@ -119,7 +119,26 @@ uv run geom report --pattern "E001-*.json"
 ```
 
 **Result files:** `results/E001-*.json`
-**Git SHA at run:** _(recorded automatically in each run record)_
+**Git SHA at run:** **unresolved — no commit was recorded.** All 12 records in
+`results/E001-gpt2*-seed*.json` carry `"git_sha": "unknown"` at line 5: that is the literal
+`provenance.git_sha()` falls back to when git is unavailable
+(`src/geomreason/provenance.py:34-35`), written verbatim by `RunRecord.write`
+(`src/geomreason/provenance.py:74`) — not a revision that later went missing. Each record
+now states the same in its `notes` (line 143).
+
+**What was inspected.** The 12 E001 records themselves; this experiment doc; and every
+other run record in the project. No SHA for E001 exists anywhere in this tree. The only hex
+revisions present name other trees and are not offered by any document as E001's:
+`94538e8-dirty` (`results/E002-grid-completion.json`), `71f65c7-dirty` (the `E001b`/`E001c`
+records) and `b88d033-dirty` (`results/E002-*.json`). The four
+`results/superseded/E001-*` records also read `"unknown"` and are outside the checker's
+`results/*.json` glob. Git history is not reachable from this checkout, so the commit
+cannot be recovered here — and none is guessed.
+
+`uv run tools/rx.py check` now reports these records: a `git_sha` that names no commit is
+not provenance, so the gap is a standing red line rather than a passing record. The
+measurements stand on their re-run material; their provenance does not. Full audit:
+`notes/e001-unresolved-provenance.md`.
 **Hardware:** _(recorded automatically)_
 
 ## Results
@@ -226,3 +245,4 @@ ladder. Revised plan in `README.md`.
 | 2026-08-11 | Fixed ungrammatical `conditional` question form | "did the alarm rings?" — malformed English is a confound; models were partly scored on it. |
 | 2026-11-04 | Reworded Analysis point 6: stickiness fell *overall* with scale, non-monotonically; flip rate rose overall, also non-monotonically | The previous wording said stickiness fell monotonically "in a way flip rate did not" — false as written: the cited stickiness values rise twice (gpt2-medium above gpt2, gpt2-xl above gpt2-large at every seed), and flip rate also moved (0.048 → 0.171). Wording only; no number changed. |
 | 2026-11-04 | Admissibility guard moved from standalone-only into `geom eval` and `geom sweep`, which now refuse (nonzero exit, no record) when any family clears the 0.40 ceiling | baselines.py's every-run contract was advertised but only enforced if the operator remembered to run `geom baselines`, which remains as the on-demand full table. |
+| 2026-11-12 | Provenance corrected: the Execution section no longer claims the git SHA was "recorded automatically"; it now records that all 12 E001 records carry `git_sha: "unknown"` at line 5, names what was inspected (the records, this doc, every other project record — only `94538e8-dirty`, `71f65c7-dirty` and `b88d033-dirty` exist, none naming E001), and points at `notes/e001-unresolved-provenance.md`; it also records that `uv run tools/rx.py check` now reports the gap | `"unknown"` is the fallback `provenance.git_sha()` returns when git is unavailable (`src/geomreason/provenance.py:34-35`), not a recovered revision; no evidence in this tree names E001's commit, so the doc was asserting provenance that does not exist. Documentation only — metrics, items, config, hardware and the verdict are unchanged. |

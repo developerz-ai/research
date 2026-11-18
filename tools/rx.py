@@ -997,11 +997,55 @@ def _check_dependency_updates(problems: list[str]) -> None:
             problems.append(f"{rel}/uv.lock: {divergence}")
 
 
+_GIT_SHA_RE = re.compile(r"[0-9a-f]{7,40}(?:-dirty)?")
+
+_GIT_SHA_REMEDY = (
+    "re-run the experiment from a tracked checkout so the producing commit is "
+    "recorded, or write the gap in the record's notes - never guess a revision")
+
+
+def _git_sha_gap_is_stated(rec: object) -> bool:
+    """True when the record itself says its ``git_sha`` is unresolved.
+
+    ``notes`` is the record's own slot for exactly this, and the remedy printed above
+    offers it as an exit. ``results/`` is append-only, so a record written from an
+    exported tree can never gain a commit afterwards; requiring one would leave a
+    permanent red gate with no action that clears it. The gap is therefore still
+    *reported* on every run, but as a stated gap rather than an unexplained one. This
+    keys on the record admitting the gap, never on the value being ``"unknown"`` — an
+    unexplained invalid SHA stays a hard problem.
+    """
+    if not isinstance(rec, dict):
+        return False
+    notes = rec.get("notes")
+    return isinstance(notes, str) and "git_sha" in notes and "unresolved" in notes.lower()
+
+
+def _git_sha_problem(rel: str, rec: object) -> str | None:
+    """Why a result's ``git_sha`` cannot be trusted as provenance, or None when it can.
+
+    Presence alone is not provenance: the literal "unknown" that ``provenance.git_sha``
+    falls back to when the revision lookup fails, an empty string, or a non-string all
+    pass a presence check while naming no code at all. Only a hex revision — optionally
+    ``-dirty`` — points at a tree the number can be reproduced from.
+    """
+    if not isinstance(rec, dict):
+        return f"{rel}: run record is not a JSON object - {_GIT_SHA_REMEDY}"
+    if "git_sha" not in rec:
+        return f"{rel}: run record missing 'git_sha' - {_GIT_SHA_REMEDY}"
+    value = rec["git_sha"]
+    if not isinstance(value, str) or not _GIT_SHA_RE.fullmatch(value):
+        return f"{rel}: git_sha {value!r} names no commit - {_GIT_SHA_REMEDY}"
+    return None
+
+
 def _knowledge_base_problems() -> list[str]:
     """Everything the knowledge-base lint can complain about.
 
     Split out of ``cmd_check`` so the check command — lint, then tests — can be
-    exercised without a whole repository behind it.
+    exercised without a whole repository behind it. Provenance gaps a record's own
+    ``notes`` state are reported by ``_stated_provenance_gaps`` instead: printed, but
+    not failures.
     """
     problems: list[str] = []
     notes = list(LIBRARY.rglob("*.md")) + list(PROJECTS.rglob("notes/*.md")) + \
@@ -1070,18 +1114,49 @@ def _knowledge_base_problems() -> list[str]:
         except json.JSONDecodeError as exc:
             problems.append(f"{results.relative_to(ROOT).as_posix()}: invalid JSON ({exc})")
             continue
-        for field in ("seed", "git_sha", "config"):
+        rel = results.relative_to(ROOT).as_posix()
+        for field in ("seed", "config"):
             if field not in rec:
-                problems.append(
-                    f"{results.relative_to(ROOT).as_posix()}: run record missing '{field}'")
+                problems.append(f"{rel}: run record missing '{field}'")
+        sha_problem = _git_sha_problem(rel, rec)
+        if sha_problem and not _git_sha_gap_is_stated(rec):
+            problems.append(sha_problem)
 
     _check_dependency_updates(problems)
     return problems
 
 
+def _stated_provenance_gaps() -> list[str]:
+    """Provenance gaps the records themselves admit, for printing without failing.
+
+    Same walk as the lint, kept separate so ``_knowledge_base_problems`` keeps returning
+    only failures. A gap is reported on every run — a stated gap is not a silent one.
+    """
+    notices: list[str] = []
+    for results in PROJECTS.rglob("results/*.json"):
+        rel = results.relative_to(ROOT).as_posix()
+        try:
+            rec = json.loads(results.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if _git_sha_problem(rel, rec) and _git_sha_gap_is_stated(rec):
+            notices.append(
+                f"{rel}: git_sha {rec['git_sha']!r} names no commit, and the record's "
+                f"notes state the gap - {_GIT_SHA_REMEDY}")
+    return notices
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Lint the knowledge base and the dependency-update configuration, then run the tests."""
     problems = _knowledge_base_problems()
+    notices = _stated_provenance_gaps()
+
+    if notices:
+        print()
+        for n in notices:
+            print(f"  {yellow('warn')}  {n}")
+        print(dim(f"  {len(notices)} stated provenance gap(s) - reported above, but the "
+                  "record's own notes state the gap, so they do not fail the check"))
 
     if problems:
         print()

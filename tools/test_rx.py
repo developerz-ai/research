@@ -10,6 +10,12 @@ The harness tests pin ``rx test`` and the suites inside ``rx check``. The runner
 faked, so no test spawns a real pytest and none of them reach the network. The
 ``bin/check`` shim is loaded by path, and the process it starts is faked too.
 
+The provenance tests pin the other half of a run record's trustworthiness: a
+``git_sha`` that is present but names no commit — ``"unknown"``, blank, a
+non-string, anything that is not 7-40 hex digits with an optional ``-dirty``
+suffix — is a problem, because a presence-only check let the writer's fallback
+value go green.
+
 The scaffold tests drive ``cmd_new_project`` against the real
 ``templates/`` directory, so template drift fails here instead of at the next
 project's creation.
@@ -24,6 +30,7 @@ from __future__ import annotations
 import ast
 import importlib.machinery
 import importlib.util
+import json
 import re
 import shutil
 import subprocess
@@ -1233,6 +1240,187 @@ def test_help_lists_the_test_command(capsys: pytest.CaptureFixture[str]) -> None
     assert rx.main(["help"]) == 0
     out = capsys.readouterr().out
     assert any(line.strip().startswith("test ") for line in out.splitlines())
+
+
+# ── provenance: a result's git_sha must name a commit ─────────────────────────
+
+REAL_RESULTS = _RX_PATH.parent.parent / "projects" / "001-geometric-reasoning" / "results"
+
+
+@pytest.fixture
+def kb_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point every path ``_knowledge_base_problems`` walks at an empty synthetic tree.
+
+    The real ``library/`` and ``projects/`` stay out of the assertion: the lint would
+    otherwise report the repository's own state alongside the record under test.
+    """
+    library = tmp_path / "library"
+    monkeypatch.setattr(rx, "ROOT", tmp_path)
+    monkeypatch.setattr(rx, "PROJECTS", tmp_path / "projects")
+    monkeypatch.setattr(rx, "LIBRARY", library)
+    monkeypatch.setattr(rx, "ARTICLES", tmp_path / "articles")
+    monkeypatch.setattr(rx, "LEADS", library / "leads")
+    monkeypatch.setattr(rx, "CORPUS_INDEX", library / "corpus" / "INDEX.md")
+    return tmp_path
+
+
+RESULT_REL = "projects/001-test-project/results/E001-demo.json"
+
+
+def _write_record(root: Path, record: dict, rel: str = RESULT_REL) -> Path:
+    return _write(root / rel, json.dumps(record, indent=2) + "\n")
+
+
+def _clean_record() -> dict:
+    """The passing shape: everything the lint asks a run record for."""
+    return {
+        "schema_version": 1,
+        "experiment": "E001",
+        "git_sha": "94538e8-dirty",
+        "seed": 0,
+        "config": {"n": 100},
+        "metrics": {"flip_rate": 0.31},
+    }
+
+
+def _kb_problems() -> list[str]:
+    return rx._knowledge_base_problems()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["unknown", "", "   ", "not-a-sha", "XYZ1234", 12345, None, "94538e8 dirty"],
+    ids=["unknown", "empty", "blank", "words", "uppercase", "not-a-string",
+         "null", "space-suffixed"],
+)
+def test_unusable_git_sha_is_reported(kb_tree: Path, value: object) -> None:
+    """The reported bug: ``"git_sha": "unknown"`` passed the presence-only check.
+
+    The writer falls back to the literal "unknown" when the revision lookup fails, so
+    presence alone lets a record that names no code at all go green.
+    """
+    record = _clean_record()
+    record["git_sha"] = value
+    _write_record(kb_tree, record)
+    problems = [p for p in _kb_problems() if "git_sha" in p]
+    assert len(problems) == 1, problems
+    assert RESULT_REL in problems[0]
+    assert "names no commit" in problems[0]
+    # Actionable: it has to say what to do, not only that something is wrong.
+    assert "re-run the experiment" in problems[0]
+    assert "notes" in problems[0]
+
+
+def test_missing_git_sha_is_reported_with_the_remedy(kb_tree: Path) -> None:
+    """A record without the key is still a problem, and the message still says what to do."""
+    record = _clean_record()
+    del record["git_sha"]
+    _write_record(kb_tree, record)
+    problems = [p for p in _kb_problems() if "git_sha" in p]
+    assert len(problems) == 1, problems
+    assert RESULT_REL in problems[0]
+    assert "missing" in problems[0]
+    assert "never guess a revision" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["94538e8-dirty", "71f65c7-dirty", "b88d033-dirty", "94538e8",
+     "0123456789abcdef0123456789abcdef01234567"],
+    ids=["short-dirty", "another-dirty", "third-dirty", "short", "40-hex"],
+)
+def test_real_shapes_are_clean(kb_tree: Path, value: str) -> None:
+    """Every SHA shape the committed records carry must stay green."""
+    record = _clean_record()
+    record["git_sha"] = value
+    _write_record(kb_tree, record)
+    assert [p for p in _kb_problems() if "git_sha" in p] == []
+
+
+def test_clean_record_is_clean(kb_tree: Path) -> None:
+    """The whole lint passes on a well-formed tree — the guard adds no false positive."""
+    _write_record(kb_tree, _clean_record())
+    assert _kb_problems() == []
+
+
+def test_superseded_records_are_not_scanned(kb_tree: Path) -> None:
+    """results/superseded/ is outside the ``results/*.json`` glob and must stay out.
+
+    Those files are history: they are never rewritten, so they are never required to
+    carry a commit either.
+    """
+    _write_record(kb_tree, _clean_record())
+    _write_record(
+        kb_tree, _clean_record() | {"git_sha": "unknown"},
+        rel="projects/001-test-project/results/superseded/E001-demo.json")
+    assert _kb_problems() == []
+
+
+def test_existing_e002_records_still_validate() -> None:
+    """The committed E002 records pass the new value check on the real tree."""
+    records = sorted(REAL_RESULTS.glob("E002*.json"))
+    assert records, f"no E002 results under {REAL_RESULTS}"
+    for path in records:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        rel = path.relative_to(_RX_PATH.parent.parent).as_posix()
+        assert rx._git_sha_problem(rel, rec) is None, rel
+
+
+STATED_GAP_NOTES = (
+    "git_sha is unresolved: the value was not recorded at run time and the producing "
+    "commit has not been established from any evidence in this tree.")
+
+
+def test_stated_gap_is_a_notice_not_a_problem(kb_tree: Path) -> None:
+    """The remedy the lint prints — "write the gap in the record's notes" — must work.
+
+    ``results/`` is append-only, so a record written from an exported tree can never gain
+    its commit afterwards. A record whose own notes say the SHA is unresolved is still
+    reported, but it no longer reads as an unexplained failure.
+    """
+    record = _clean_record()
+    record["git_sha"] = "unknown"
+    record["notes"] = STATED_GAP_NOTES
+    _write_record(kb_tree, record)
+    problems = [p for p in _kb_problems() if "git_sha" in p]
+    assert problems == [], problems
+    notices = rx._stated_provenance_gaps()
+    assert len(notices) == 1, notices
+    assert RESULT_REL in notices[0]
+    # Still actionable and still names the value: a notice is not silence.
+    assert "'unknown'" in notices[0]
+    assert "notes state the gap" in notices[0]
+
+
+def test_unstated_gap_is_still_a_problem(kb_tree: Path) -> None:
+    """Notes that do not state the gap do not excuse it — the check keys on the admission."""
+    record = _clean_record()
+    record["git_sha"] = "unknown"
+    record["notes"] = "ran overnight"
+    _write_record(kb_tree, record)
+    problems = [p for p in _kb_problems() if "git_sha" in p]
+    assert len(problems) == 1, problems
+    assert RESULT_REL in problems[0]
+
+
+def test_every_committed_e001_record_states_its_gap() -> None:
+    """All 12 E001 records admit the gap, so the gate reports it as a notice, not a failure."""
+    records = sorted(REAL_RESULTS.glob("E001-gpt2*-seed*.json"))
+    assert len(records) == 12, len(records)
+    for path in records:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["git_sha"] == "unknown", path.name
+        assert rx._git_sha_gap_is_stated(rec), path.name
+
+
+def test_provenance_gap_in_the_committed_tree_is_reported() -> None:
+    """End to end on the real tree: the E001 records' "unknown" is reported, not swallowed."""
+    named = "projects/001-geometric-reasoning/results/E001-gpt2-seed0.json"
+    problems = [p for p in rx._knowledge_base_problems() if named in p]
+    assert problems == [], problems
+    notices = [n for n in rx._stated_provenance_gaps() if named in n]
+    assert len(notices) == 1, notices
+    assert "git_sha" in notices[0] and "notes state the gap" in notices[0]
 
 
 # ── bin/check: the shim over the canonical command ─────────────────────────────

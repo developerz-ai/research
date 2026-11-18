@@ -76,11 +76,25 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
   requires-python (788-793), requires-dist specifiers (809-824), index sources in
   both directions (826-882), and extras (884-925). It never reads `results/`
   [source: function body, 753-927].
-- `rx check` does scan run records — but only for JSON validity and the presence of
-  `seed`, `git_sha`, `config` (`tools/rx.py:1067-1076`, field list at 1073, inside
-  `_knowledge_base_problems`, `tools/rx.py:1000-1079`) [source]. No recorded
-  environment field is ever compared against the lock. The check now also runs the test
-  suites (`tools/rx.py:1100`) — that adds a red-suite gate, not an environment gate.
+- `rx check` does scan run records — for JSON validity, for the presence of `seed` and
+  `config`, and now for the *value* of `git_sha` (`tools/rx.py:1092-1104`, inside
+  `_knowledge_base_problems`, `tools/rx.py:1025-1107`) [source]. The value check
+  (`tools/rx.py:1007-1022`) rejects a `git_sha` that is missing, empty, non-string, or not a
+  hex revision optionally suffixed `-dirty`: the literal `"unknown"` that
+  `provenance.git_sha()` falls back to when git is unavailable
+  (`src/geomreason/provenance.py:34-35`) names no code, so a record carrying it is reported
+  rather than accepted. The remedy text in each problem names the two honest exits — re-run
+  from a tracked checkout, or write the gap in the record's `notes`, never guess a revision
+  (`tools/rx.py:1002-1004`) [source].
+- Consequence for this project: all 12 `results/E001-gpt2*-seed*.json` records carry
+  `git_sha: "unknown"` (line 5) and will be reported by `rx check` until their provenance is
+  established or the gap is accepted in writing in each record's `notes`, which the 12 now
+  do [ours: `grep -n '"git_sha"'` and `grep -n '"notes"'` over those files, this session].
+  That red line is reported here deliberately, not silenced: the audit is
+  `notes/e001-unresolved-provenance.md`. No recorded *environment* field is ever compared
+  against the lock, so this value check does not close the drift below. The check also runs
+  the test suites (`_run_suites_report()` called at `tools/rx.py:1128`) — a red-suite gate, not an environment gate
+  [source].
 - So a lock that no longer matches any recorded run passes as long as it still
   describes the manifest: the checkout was green while unreproducible [ours:
   reading of the source, this session]. This drift class needs a check that reads
