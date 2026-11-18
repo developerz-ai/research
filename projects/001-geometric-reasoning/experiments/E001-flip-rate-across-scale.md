@@ -135,9 +135,9 @@ records) and `b88d033-dirty` (`results/E002-*.json`). The four
 `results/*.json` glob. Git history is not reachable from this checkout, so the commit
 cannot be recovered here — and none is guessed.
 
-`uv run tools/rx.py check` now reports these records: a `git_sha` that names no commit is
-not provenance, so the gap is a standing red line rather than a passing record. The
-measurements stand on their re-run material; their provenance does not. Full audit:
+`uv run tools/rx.py check` now reports these records as non-failing warnings: a `git_sha`
+that names no commit is not provenance, but each record's `notes` admits the unresolved gap.
+The measurements stand on their re-run material; their provenance does not. Full audit:
 `notes/e001-unresolved-provenance.md`.
 **Hardware:** _(recorded automatically)_
 

@@ -1039,13 +1039,14 @@ def _git_sha_problem(rel: str, rec: object) -> str | None:
     return None
 
 
-def _knowledge_base_problems() -> list[str]:
+def _knowledge_base_problems(notices: list[str] | None = None) -> list[str]:
     """Everything the knowledge-base lint can complain about.
 
     Split out of ``cmd_check`` so the check command — lint, then tests — can be
-    exercised without a whole repository behind it. Provenance gaps a record's own
-    ``notes`` state are reported by ``_stated_provenance_gaps`` instead: printed, but
-    not failures.
+    exercised without a whole repository behind it. When ``notices`` is supplied,
+    provenance gaps a record's own ``notes`` state are reported there: printed, but
+    not failures. Collecting them during the lint's record walk avoids parsing every
+    result twice.
     """
     problems: list[str] = []
     notes = list(LIBRARY.rglob("*.md")) + list(PROJECTS.rglob("notes/*.md")) + \
@@ -1119,37 +1120,23 @@ def _knowledge_base_problems() -> list[str]:
             if field not in rec:
                 problems.append(f"{rel}: run record missing '{field}'")
         sha_problem = _git_sha_problem(rel, rec)
-        if sha_problem and not _git_sha_gap_is_stated(rec):
-            problems.append(sha_problem)
+        if sha_problem:
+            if _git_sha_gap_is_stated(rec):
+                if notices is not None:
+                    detail = sha_problem.removeprefix(f"{rel}: ")
+                    notices.append(
+                        f"{rel}: {detail}, and the record's notes state the gap")
+            else:
+                problems.append(sha_problem)
 
     _check_dependency_updates(problems)
     return problems
 
 
-def _stated_provenance_gaps() -> list[str]:
-    """Provenance gaps the records themselves admit, for printing without failing.
-
-    Same walk as the lint, kept separate so ``_knowledge_base_problems`` keeps returning
-    only failures. A gap is reported on every run — a stated gap is not a silent one.
-    """
-    notices: list[str] = []
-    for results in PROJECTS.rglob("results/*.json"):
-        rel = results.relative_to(ROOT).as_posix()
-        try:
-            rec = json.loads(results.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        if _git_sha_problem(rel, rec) and _git_sha_gap_is_stated(rec):
-            notices.append(
-                f"{rel}: git_sha {rec['git_sha']!r} names no commit, and the record's "
-                f"notes state the gap - {_GIT_SHA_REMEDY}")
-    return notices
-
-
 def cmd_check(args: argparse.Namespace) -> int:
     """Lint the knowledge base and the dependency-update configuration, then run the tests."""
-    problems = _knowledge_base_problems()
-    notices = _stated_provenance_gaps()
+    notices: list[str] = []
+    problems = _knowledge_base_problems(notices)
 
     if notices:
         print()

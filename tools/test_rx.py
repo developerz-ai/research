@@ -1174,7 +1174,7 @@ def test_rx_check_runs_the_suites_and_fails_on_a_red_suite(
     harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`rx check` runs the suites after the lint: a red suite is a red check."""
-    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda: [])
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
     runner = FakeRunner(returncode=1, stdout="1 failed in 0.01s")
     _fake_uv(monkeypatch)
     monkeypatch.setattr(rx.subprocess, "run", runner)
@@ -1190,7 +1190,7 @@ def test_rx_check_is_green_when_the_lint_and_the_suites_pass(
     harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The whole check — lint and suites — is one exit code."""
-    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda: [])
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
     runner = FakeRunner()
     _fake_uv(monkeypatch)
     monkeypatch.setattr(rx.subprocess, "run", runner)
@@ -1205,7 +1205,8 @@ def test_rx_check_still_fails_on_a_knowledge_base_problem(
 ) -> None:
     """The lint still has teeth: a knowledge-base problem fails the check."""
     monkeypatch.setattr(
-        rx, "_knowledge_base_problems", lambda: ["library/x.md: dangling link [[y]]"])
+        rx, "_knowledge_base_problems",
+        lambda _notices=None: ["library/x.md: dangling link [[y]]"])
     runner = FakeRunner()
     _fake_uv(monkeypatch)
     monkeypatch.setattr(rx.subprocess, "run", runner)
@@ -1218,7 +1219,7 @@ def test_rx_check_no_tests_skips_the_suites(
     harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`rx check --no-tests` is the fast lint: no suite is started."""
-    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda: [])
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
     runner = FakeRunner()
     _fake_uv(monkeypatch)
     monkeypatch.setattr(rx.subprocess, "run", runner)
@@ -1382,9 +1383,9 @@ def test_stated_gap_is_a_notice_not_a_problem(kb_tree: Path) -> None:
     record["git_sha"] = "unknown"
     record["notes"] = STATED_GAP_NOTES
     _write_record(kb_tree, record)
-    problems = [p for p in _kb_problems() if "git_sha" in p]
+    notices: list[str] = []
+    problems = [p for p in rx._knowledge_base_problems(notices) if "git_sha" in p]
     assert problems == [], problems
-    notices = rx._stated_provenance_gaps()
     assert len(notices) == 1, notices
     assert RESULT_REL in notices[0]
     # Still actionable and still names the value: a notice is not silence.
@@ -1403,6 +1404,20 @@ def test_unstated_gap_is_still_a_problem(kb_tree: Path) -> None:
     assert RESULT_REL in problems[0]
 
 
+def test_stated_gap_with_no_git_sha_key_is_a_notice_not_a_crash(kb_tree: Path) -> None:
+    """An admitted missing field is formatted without indexing an absent dictionary key."""
+    record = _clean_record()
+    del record["git_sha"]
+    record["notes"] = STATED_GAP_NOTES
+    _write_record(kb_tree, record)
+    notices: list[str] = []
+    assert _kb_problems() == []
+    assert rx._knowledge_base_problems(notices) == []
+    assert len(notices) == 1, notices
+    assert "missing 'git_sha'" in notices[0]
+    assert "notes state the gap" in notices[0]
+
+
 def test_every_committed_e001_record_states_its_gap() -> None:
     """All 12 E001 records admit the gap, so the gate reports it as a notice, not a failure."""
     records = sorted(REAL_RESULTS.glob("E001-gpt2*-seed*.json"))
@@ -1416,11 +1431,12 @@ def test_every_committed_e001_record_states_its_gap() -> None:
 def test_provenance_gap_in_the_committed_tree_is_reported() -> None:
     """End to end on the real tree: the E001 records' "unknown" is reported, not swallowed."""
     named = "projects/001-geometric-reasoning/results/E001-gpt2-seed0.json"
-    problems = [p for p in rx._knowledge_base_problems() if named in p]
+    notices: list[str] = []
+    problems = [p for p in rx._knowledge_base_problems(notices) if named in p]
     assert problems == [], problems
-    notices = [n for n in rx._stated_provenance_gaps() if named in n]
-    assert len(notices) == 1, notices
-    assert "git_sha" in notices[0] and "notes state the gap" in notices[0]
+    matching_notices = [n for n in notices if named in n]
+    assert len(matching_notices) == 1, matching_notices
+    assert "git_sha" in matching_notices[0] and "notes state the gap" in matching_notices[0]
 
 
 # ── bin/check: the shim over the canonical command ─────────────────────────────

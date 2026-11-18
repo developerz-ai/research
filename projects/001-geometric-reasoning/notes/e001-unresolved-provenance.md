@@ -3,7 +3,7 @@
 As of 2026-11-12. What the 12 E001 run records say about the code that produced them, what
 was inspected to establish it, and what cannot be established from this checkout. Every
 factual line carries an evidence class and a `path:line` locator; counts and greps were run
-in this session. No wiki-links: `tools/rx.py:1039-1042` fails any note link whose final stem
+in this session. No wiki-links: `tools/rx.py:1058-1061` fails any note link whose final stem
 is not a `library/` file, so paths are cited as written.
 
 ## Finding
@@ -54,9 +54,10 @@ re-run* them; it is not enough to say *which code*.
   (Amendment log, 2026-11-12).
 - **The other records in this project.** No other record's `git_sha` names E001's commit.
   The only hex revisions anywhere in the project are `94538e8-dirty`
-  (`results/E002-grid-completion.json`) and `71f65c7-dirty`
-  (`results/superseded/E001c-HuggingFaceTB_nanowhale-100m-base-seed0.json`), and neither is
-  offered by any document as E001's producing tree [ours: `grep -rn 'git_sha'
+  (`results/E002-grid-completion.json`), `71f65c7-dirty`
+  (`results/superseded/E001c-HuggingFaceTB_nanowhale-100m-base-seed0.json`), and
+  `b88d033-dirty` (`results/E002-*.json`), and none is offered by any document as E001's
+  producing tree [ours: `grep -rn 'git_sha'
   results/` and doc search of `experiments/`, this session].
 - **Git history.** Not reachable from this run — the run has no git, and `results/` is
   append-only, so nothing here can be resolved by looking backward at the tree [open].
@@ -68,17 +69,18 @@ Four `results/superseded/E001-*` records carry the same `"git_sha": "unknown"` a
 `results/superseded/E001-gpt2-seed0.json:5`]. They are the discarded first seed-0 sweep
 (see the 2026-08-11 amendment rows for the `role_swap` defect) and they are **outside** the
 `rx check` run-record glob `results/*.json`, which is one level deep
-(`tools/rx.py:1092`) [source]. They are left byte-identical here, as results are
+(`tools/rx.py:1111`) [source]. They are left byte-identical here, as results are
 append-only (`src/geomreason/provenance.py:61-68`), so the checker's new `git_sha` value
 check does not and should not report them.
 
 ## Consequence
 
-`rx check` now rejects `git_sha: "unknown"` as provenance (`tools/rx.py:1007-1022`), so these
-12 records are reported on every run until their provenance is either established or the gap
-is accepted in writing. That red line is the correct state: it is the check doing its job on
-a genuine gap, not a regression to suppress. Re-running E001 from a tracked checkout would
-close it for future records; it cannot repair these 12, whose code is gone from the record.
+`rx check` identifies `git_sha: "unknown"` as invalid provenance
+(`tools/rx.py:1024-1039`), then reports these 12 records as non-failing warnings because each
+record's `notes` accepts the gap in writing. The warning is the correct state: it keeps the
+genuine gap visible without claiming the check fails. Re-running E001 from a tracked checkout
+would close it for future records; it cannot repair these 12, whose code is gone from the
+record.
 
 ## What this note cannot conclude
 

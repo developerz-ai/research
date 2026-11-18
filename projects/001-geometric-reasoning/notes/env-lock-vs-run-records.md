@@ -3,7 +3,7 @@
 As of 2026-11-04; re-verified against this checkout on 2026-11-12. What drifted, why, why
 the checker could not see it, and where it stands now. Every factual line is tagged with its
 evidence class and carries `path:line` locators; counts and uniformity greps were run in
-this session. No wiki-links: repo paths are cited as written (tools/rx.py:1011-1017 fails
+this session. No wiki-links: repo paths are cited as written (tools/rx.py:1059-1062 fails
 any note link whose final stem is not a library/ file).
 
 ## Finding
@@ -77,9 +77,9 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
   both directions (826-882), and extras (884-925). It never reads `results/`
   [source: function body, 753-927].
 - `rx check` does scan run records — for JSON validity, for the presence of `seed` and
-  `config`, and now for the *value* of `git_sha` (`tools/rx.py:1092-1104`, inside
-  `_knowledge_base_problems`, `tools/rx.py:1025-1107`) [source]. The value check
-  (`tools/rx.py:1007-1022`) rejects a `git_sha` that is missing, empty, non-string, or not a
+  `config`, and now for the *value* of `git_sha` (`tools/rx.py:1112-1130`, inside
+  `_knowledge_base_problems`, `tools/rx.py:1042-1133`) [source]. The value check
+  (`tools/rx.py:1024-1039`) identifies a `git_sha` that is missing, empty, non-string, or not a
   hex revision optionally suffixed `-dirty`: the literal `"unknown"` that
   `provenance.git_sha()` falls back to when git is unavailable
   (`src/geomreason/provenance.py:34-35`) names no code, so a record carrying it is reported
@@ -87,13 +87,13 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
   from a tracked checkout, or write the gap in the record's `notes`, never guess a revision
   (`tools/rx.py:1002-1004`) [source].
 - Consequence for this project: all 12 `results/E001-gpt2*-seed*.json` records carry
-  `git_sha: "unknown"` (line 5) and will be reported by `rx check` until their provenance is
-  established or the gap is accepted in writing in each record's `notes`, which the 12 now
-  do [ours: `grep -n '"git_sha"'` and `grep -n '"notes"'` over those files, this session].
-  That red line is reported here deliberately, not silenced: the audit is
+  `git_sha: "unknown"` (line 5) and are reported by `rx check` as non-failing warnings because
+  the gap is accepted in writing in each record's `notes`, which the 12 now do [ours:
+  `grep -n '"git_sha"'` and `grep -n '"notes"'` over those files, this session]. That warning
+  is reported here deliberately, not silenced: the audit is
   `notes/e001-unresolved-provenance.md`. No recorded *environment* field is ever compared
   against the lock, so this value check does not close the drift below. The check also runs
-  the test suites (`_run_suites_report()` called at `tools/rx.py:1128`) — a red-suite gate, not an environment gate
+  the test suites (`_run_suites_report()` called at `tools/rx.py:1162`) — a red-suite gate, not an environment gate
   [source].
 - So a lock that no longer matches any recorded run passes as long as it still
   describes the manifest: the checkout was green while unreproducible [ours:
