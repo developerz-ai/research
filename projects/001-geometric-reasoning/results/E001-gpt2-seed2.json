@@ -140,7 +140,7 @@
       }
     }
   },
-  "notes": "",
+  "notes": "git_sha is unresolved: the value was not recorded at run time and the producing commit has not been established from any evidence in this tree. The measurement stands; its provenance does not.",
   "items": [
     {
       "pair_id": "comparison-0",
