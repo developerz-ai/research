@@ -1531,6 +1531,37 @@ def test_a_relative_report_path_resolves_against_the_callers_cwd(
     assert not (repo / "out").exists()
 
 
+def test_concurrent_report_writes_use_separate_temporary_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two report writers may replace one destination without sharing temporary state.
+
+    Hold both replacements until their temporary files are complete. A fixed
+    ``r.json.tmp`` lets only one writer replace the destination; distinct,
+    exclusively-created siblings let both writers finish and leave one complete report.
+    """
+    report_path = tmp_path / "r.json"
+    barrier = Barrier(2)
+    original_replace = Path.replace
+
+    def synchronized_replace(self: Path, target: Path) -> Path:
+        barrier.wait(timeout=5)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+    bodies = [{"writer": 1}, {"writer": 2}]
+
+    def write(body: dict[str, int]) -> bool:
+        return rx._write_report(str(report_path), body)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, bodies))
+
+    assert results == [True, True]
+    assert _read_report(report_path) in bodies
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_an_unwritable_report_path_fails_the_run_and_names_the_path(
     harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1564,10 +1595,9 @@ def test_a_report_destination_with_no_file_name_fails_the_run_and_names_the_path
 ) -> None:
     """A destination that names no file is the documented error, never a traceback.
 
-    ``Path.with_name`` raises ValueError — not OSError — for a destination whose final
-    component is empty (````.````, ````/````, ``--report ""``), so deriving the temp name
-    outside the write's guard escaped ``main`` as a crash. The caller must get the same
-    exit 1 and the same message naming what they typed.
+    The report path must name a file, not a directory. Every such invalid destination
+    must get the documented exit 1 and message rather than a traceback or an orphaned
+    temporary file.
     """
     runner = FakeRunner()
     _fake_uv(monkeypatch)

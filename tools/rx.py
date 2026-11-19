@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1470,14 +1471,16 @@ def _write_report(path_text: str, body: dict[str, object]) -> bool:
     """
     dest = Path(path_text)
     tmp: Path | None = None
-    # Deriving the sibling temp name is itself a way to fail: a destination with an empty
-    # final component (`.`, `/`, `--report ""`) has no name to append to, and ``with_name``
-    # says so with ValueError, not OSError. Every bad destination must land in the one
-    # documented error, so the derivation belongs inside the guard.
     try:
-        tmp = dest.with_name(dest.name + ".tmp")
+        if not dest.name:
+            raise ValueError("report destination must name a file")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{dest.name}.", suffix=".tmp", dir=dest.parent, text=True,
+        )
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(body, indent=2) + "\n")
         tmp.replace(dest)
     except (OSError, ValueError) as exc:
         if tmp is not None:
