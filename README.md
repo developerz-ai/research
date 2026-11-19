@@ -114,3 +114,5 @@ Roster and dispatch patterns: [`docs/hive.md`](docs/hive.md).
 - Baselines are matched on compute budget, not on convenience.
 
 More in [`CLAUDE.md`](CLAUDE.md).
+
+License: MIT, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
