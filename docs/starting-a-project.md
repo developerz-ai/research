@@ -9,9 +9,20 @@ order and never reused — rendered from `templates/project/` with the CLI name 
 underscore package name filled in:
 
 - `CLAUDE.md` and `README.md`
-- `pyproject.toml`: torch pinned to the PyTorch cu126 index (the default PyPI wheel is
-  CPU-only and fails silently), a typer CLI, and a `dev` extra with pytest and ruff.
+- `pyproject.toml`: the `pytorch` index pinned to the cu126 wheel set via `[[tool.uv.index]]`
+  + `[tool.uv.sources]` — so the default PyPI wheel, which is CPU-only and fails silently,
+  is never selected — plus a torch *version constraint* that is only a lower bound on day
+  one: `torch>=2.5` (`templates/project/pyproject.toml:7`). Two separate facts: the index
+  is pinned, the version is not. The scaffold renders no exact pin: an exact pin belongs to
+  a project that has to keep rebuilding a recorded environment, and a fresh project takes a
+  current wheel. Also a typer CLI, and a `dev` extra with pytest and ruff.
+  The four layers — declared constraint, wheel index, lock-resolved version, and what
+  `rx check` compares — are explained once in `docs/toolchain.md`, under *What fixes
+  `torch`, and what only bounds it*.
   `new-project` runs `uv lock` right there, so the lock exists before your first sync.
+  **The committed `uv.lock` is what fixes the resolved torch version**, not the constraint
+  in `pyproject.toml` — a bound only says what a resolution may pick. Change the constraint
+  and the lock has to be regenerated with it, or `rx check` reports the divergence.
 - `src/<pkg>/` with `device.py` (the only module allowed to name a vendor backend),
   `cli.py` (`doctor` + `smoke`), and `provenance.py` (run records)
 - `tests/test_scaffold.py`, so `uv run pytest -q` has something real to run from day one

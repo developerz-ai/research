@@ -45,6 +45,60 @@ nobody can upgrade.
 
 `uv.lock` **is** committed. Reproducibility is the whole point.
 
+### What fixes `torch`, and what only bounds it
+
+Four different things get shortened to "the torch version" here, and none of them implies
+the others: the declared constraint, the wheel index, the version the lock resolved, and
+what the checker compares. No single one of them decides what a sync installs: `uv sync`
+resolves + installs from `pyproject.toml` + `uv.lock` together (the `uv sync` line above),
+so the lock names the version, while a manifest or an index that no longer agrees with it
+replaces the environment at the next sync.
+
+- **The version constraint** — `[project].dependencies` in each project's `pyproject.toml`.
+  It bounds what a resolution may choose; it is not a promise about what is installed.
+  `projects/001-geometric-reasoning/pyproject.toml:7` declares `torch==2.14.1` (an exact
+  pin) and `projects/002-ftl-axiom-search/pyproject.toml:7` declares `torch>=2.5` (a lower
+  bound — every newer torch satisfies it) [source].
+- **The wheel index / backend** — `[[tool.uv.index]]` + `[tool.uv.sources]`. This decides
+  *which build* of a torch version a resolution may take, and the local version suffix is
+  part of the resolved string (`2.14.1+cu126`, never `2.14.1+cpu`): both manifests point
+  the `pytorch` index at `https://download.pytorch.org/whl/cu126`, so PyPI's default
+  CPU-only wheel is never selected [source]. The index reaches a machine through the
+  manifest, so editing that URL replaces the wheel at the next sync even when the version
+  constraint is untouched — a one-shot `uv sync --index` override does not persist, because
+  later `uv run` commands sync against the manifest
+  [source: `templates/project/pyproject.toml:33-34`].
+- **The resolved version** — the committed `uv.lock`. This is the only layer that names a
+  concrete version, and therefore the only one that makes a recorded run reproducible: both
+  locks currently resolve `2.14.1+cu126`
+  (`projects/001-geometric-reasoning/uv.lock:1057`,
+  `projects/002-ftl-axiom-search/uv.lock:1143`) [source]. A lower bound that the committed
+  lock still satisfies installs the lock's version. It decides again the moment the lock
+  stops satisfying it: an outdated lock is re-resolved before installing, so a manifest
+  edit reaches a machine on the next `uv sync` or `uv run` with no separate `uv lock` step
+  (the `uv sync` line above) [open — uv's re-lock-before-install behaviour, not measured in
+  this checkout; what is verified here is the manifest-is-the-input half, line 37].
+- **What the checker compares** — `rx check` matches the lock against the *manifest*
+  (requires-python, every `requires-dist` specifier, index sources, extras) and nothing
+  else. It never compares either against the environments recorded in `results/*.json`, so
+  a lock that still describes its manifest passes even when it no longer describes any
+  recorded run [source: `_lock_divergences`, `tools/rx.py:756-930`; the run-record scan is
+  `tools/rx.py:1115-1133` and reads `seed`, `config` and `git_sha` only] [ours].
+
+So the two projects are uv-managed the same way where discovery depends on it — same pinned
+`cu126` index in `[[tool.uv.index]]` + `[tool.uv.sources]`, both found through a committed
+`uv.lock` — while their declared torch constraints differ. The rest of each dependency set
+is per project too: `projects/001-geometric-reasoning` carries no `z3-solver`.
+
+**Decision (as of 2026-11): the constraint stays per project; there is no repo-wide torch
+version.** A project that has recorded runs under one torch version has to be able to
+rebuild *that* environment, and a single shared constraint would rewrite the environment
+under every project at once whenever the updater moved it. Each project declares what its
+own records need, and the lock freezes it.
+
+What `rx check` enforces is narrower still — lock against manifest, never lock against
+recorded runs. See the fourth bullet above and the last bullet under *Dependency updates*.
+
 ### Dependency updates
 
 A project's `pyproject.toml` declares a `[tool.uv]` table, so the project is uv-managed.
@@ -57,9 +111,16 @@ project's directory names the `uv` ecosystem.
 | `projects/001-geometric-reasoning` | `pyproject.toml` (`[tool.uv]`, explicit `cu126` index) | `projects/001-geometric-reasoning/uv.lock` | ecosystem `uv`, `/projects/001-geometric-reasoning` |
 | `projects/002-ftl-axiom-search` | `pyproject.toml` (`[tool.uv]`, explicit `cu126` index) | `projects/002-ftl-axiom-search/uv.lock` | ecosystem `uv`, `/projects/002-ftl-axiom-search` |
 
-Both projects are uv-managed in exactly the same way — each pins `torch` to an explicit
-`https://download.pytorch.org/whl/cu126` index via `[[tool.uv.index]]` + `[tool.uv.sources]`
-— and both are discovered through their committed lockfile.
+Both projects are uv-managed the same way where the updater is concerned — each pins
+`torch` to an explicit `https://download.pytorch.org/whl/cu126` index via
+`[[tool.uv.index]]` + `[tool.uv.sources]`, and both are discovered through their committed
+lockfile — but their **version constraints differ**: `torch==2.14.1`
+(`projects/001-geometric-reasoning/pyproject.toml:7`) against `torch>=2.5`
+(`projects/002-ftl-axiom-search/pyproject.toml:7`) [source]. Nothing in the tree
+enforces one shared constraint: each project's torch constraint lives only in its own
+manifest, and `rx check` compares each lock against its own manifest. The forward rule: a
+project whose recorded runs pin a torch version declares that version in its own manifest,
+and its lock freezes it — see *What fixes `torch`, and what only bounds it* above.
 
 **A correct Dependabot configuration is not evidence that a security update was delivered.**
 Configuration correctness means only that the manifest is discoverable by the ecosystem named
@@ -96,6 +157,13 @@ updater's reach. It also enforces the two ways that guarantee can rot:
   resolved uv index sources (`[tool.uv.sources]` through `[[tool.uv.index]]`), and the
   extras — and names what moved. The remedy for every divergence is the same: run
   `uv lock` and commit the regenerated file.
+
+  Note what this does **not** cover: the comparison is lock ↔ manifest only. The run-record
+  scan is narrower still — it reads `seed`, `config` and the shape of `git_sha`, never
+  `torch_version` (`tools/rx.py:1115-1133`). So a lock that disagrees with every recorded
+  run passes as long as it still describes its manifest, and a manifest constraint is never
+  checked against the environment the records name. Worked example and the measured gap:
+  `projects/001-geometric-reasoning/notes/env-lock-vs-run-records.md` [ours].
 
 ## Tests
 

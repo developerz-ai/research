@@ -3,7 +3,7 @@
 As of 2026-11-04; re-verified against this checkout on 2026-11-12. What drifted, why, why
 the checker could not see it, and where it stands now. Every factual line is tagged with its
 evidence class and carries `path:line` locators; counts and uniformity greps were run in
-this session. No wiki-links: repo paths are cited as written (tools/rx.py:1059-1062 fails
+this session. No wiki-links: repo paths are cited as written (tools/rx.py:1062-1065 fails
 any note link whose final stem is not a library/ file).
 
 ## Finding
@@ -49,7 +49,9 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
   Remedy].
 - `uv.lock` is committed because reproducibility is the whole point
   (`docs/toolchain.md:46`); a checkout whose lock cannot rebuild the recorded
-  environment breaks that promise for all 46 records at once [ours].
+  environment breaks that promise for all 46 records at once [ours]. The layers that fix
+  `torch` — manifest constraint, wheel index, lock-resolved version, and what the checker
+  compares — are separated in `docs/toolchain.md:48-86` [source].
 - Scope of the break: under the inherited lock, `uv sync` could not reproduce any of
   the 46 recorded runs — not an approximation; a different torch version entirely.
 
@@ -58,11 +60,22 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
 - The project's dependencies are discovered by the weekly updater through the
   committed lock: ecosystem `uv`, directory `/projects/001-geometric-reasoning`,
   weekly Thursday 01:00 [source: `.github/dependabot.yml:18-29`; discovery-anchor
-  table `docs/toolchain.md:50-58`, project row `:57`].
-- The open range `torch>=2.5` made any newer torch a valid update target, so a
-  routine minor bump legitimately walked past the version every record carries
-  [open — which updater PR moved the lock lives on GitHub, not in this tree;
-  delivery is unverified from a checkout per `docs/toolchain.md:64-71`].
+  table `docs/toolchain.md:109-112`, project row `:111`].
+- **Only one of those layers pins anything.** The pre-fix manifest declared
+  `torch>=2.5` — a *lower bound*, i.e. a bound on what a resolution was allowed to pick,
+  never a statement about what was installed. The committed `uv.lock`'s resolved version
+  (`2.14.1+cu126` at the time) is the layer that names what a `uv sync` installs — the lock
+  and the manifest are read together, so a manifest the lock no longer satisfies replaces
+  the environment at the next sync — and therefore the only one that can make a recorded run
+  reproducible. It did not match the 2.13.0+cu126 the 46 records carry. The exact pin
+  (`torch==2.14.1` today) is a third thing again: it constrains what a *future* resolution
+  may pick, which is why it closed the drift at its source, but it says nothing about
+  environments resolved before it was written [source: `pyproject.toml:7`, `uv.lock` torch
+  block; the layers are separated in `docs/toolchain.md:48-86`].
+- So the open range made any newer torch a valid update target, and a routine minor bump
+  could walk past the version every record carries [open — which updater PR moved the lock
+  lives on GitHub, not in this tree; delivery is unverified from a checkout per
+  `docs/toolchain.md:125-132`].
 - The 2026-11-04 fix replaced the range with an exact pin, which is what closed the
   drift — for one cycle. The manifest says as much itself: the pin constrains `uv sync`,
   but the updater can move it in a later PR [source: `pyproject.toml:30-33`]. It did: the
@@ -71,21 +84,21 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
 
 ## Why the checker missed it
 
-- `_lock_divergences` (`tools/rx.py:753-927`) reads exactly two files: the manifest
-  and the lock, both parsed at `tools/rx.py:767-768` [source]. It compares
-  requires-python (788-793), requires-dist specifiers (809-824), index sources in
-  both directions (826-882), and extras (884-925). It never reads `results/`
-  [source: function body, 753-927].
+- `_lock_divergences` (`tools/rx.py:756-930`) reads exactly two files: the manifest
+  and the lock, both parsed at `tools/rx.py:770-771` [source]. It compares
+  requires-python (791-796), requires-dist specifiers (812-827), index sources in
+  both directions (829-885), and extras (890-928). It never reads `results/`
+  [source: function body, 756-930].
 - `rx check` does scan run records — for JSON validity, for the presence of `seed` and
-  `config`, and now for the *value* of `git_sha` (`tools/rx.py:1112-1130`, inside
-  `_knowledge_base_problems`, `tools/rx.py:1042-1133`) [source]. The value check
-  (`tools/rx.py:1024-1039`) identifies a `git_sha` that is missing, empty, non-string, or not a
+  `config`, and now for the *value* of `git_sha` (`tools/rx.py:1115-1133`, inside
+  `_knowledge_base_problems`, `tools/rx.py:1045-1136`) [source]. The value check
+  (`tools/rx.py:1027-1042`) identifies a `git_sha` that is missing, empty, non-string, or not a
   hex revision optionally suffixed `-dirty`: the literal `"unknown"` that
   `provenance.git_sha()` falls back to when git is unavailable
   (`src/geomreason/provenance.py:34-35`) names no code, so a record carrying it is reported
   rather than accepted. The remedy text in each problem names the two honest exits — re-run
   from a tracked checkout, or write the gap in the record's `notes`, never guess a revision
-  (`tools/rx.py:1002-1004`) [source].
+  (`tools/rx.py:1005-1007`) [source].
 - Consequence for this project: all 12 `results/E001-gpt2*-seed*.json` records carry
   `git_sha: "unknown"` (line 5) and are reported by `rx check` as non-failing warnings because
   the gap is accepted in writing in each record's `notes`, which the 12 now do [ours:
@@ -93,7 +106,7 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
   is reported here deliberately, not silenced: the audit is
   `notes/e001-unresolved-provenance.md`. No recorded *environment* field is ever compared
   against the lock, so this value check does not close the drift below. The check also runs
-  the test suites (`_run_suites_report()` called at `tools/rx.py:1162`) — a red-suite gate, not an environment gate
+  the test suites (`_run_suites_report()` called at `tools/rx.py:1172`) — a red-suite gate, not an environment gate
   [source].
 - So a lock that no longer matches any recorded run passes as long as it still
   describes the manifest: the checkout was green while unreproducible [ours:
@@ -122,9 +135,9 @@ on torch 2.13.0+cu126, and one CPU run under the new pin.
   [source: `pyproject.toml:40-43`] — and the `[tool.uv.sources]` torch mapping
   [source: `pyproject.toml:45-46`]. Backend overrides without a file edit
   (`pyproject.toml:35-37`) and the lock-vs-manifest index comparison
-  (`tools/rx.py:826-882`) stay valid.
+  (`tools/rx.py:829-885`) stay valid.
 - The lock is regenerated by `uv lock` from the project directory — the checker's
-  divergence messages carry a `(run 'uv lock')` remedy (`tools/rx.py:793`, `:824`, `:866`);
+  divergence messages carry a `(run 'uv lock')` remedy (`tools/rx.py:796`, `:827`, `:869`);
   hand-editing is not a route [source].
 
 ## Residual gap [open]
@@ -141,7 +154,7 @@ record set. Lead material; deliberately not built here.
 ## What this note cannot conclude
 
 - That the 2.14.1 lock ever reached a synced machine, or which updater PR moved it —
-  that history is on GitHub, outside this tree [source: `docs/toolchain.md:64-71`].
+  that history is on GitHub, outside this tree [source: `docs/toolchain.md:125-132`].
 - Anything about torch 2.14.1's behaviour on the reference hardware: no CUDA run in this
   tree used it. The one 2.14.1 record is a CPU run on Linux.
 - The pre-fix locators (`pyproject.toml:7` = `torch>=2.5`; `uv.lock:1057` =
