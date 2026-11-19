@@ -112,6 +112,7 @@ uv run tools/rx.py help          # catalog of every command in the repo
 uv run tools/rx.py status NNN    # readiness + state of one project
 uv run tools/rx.py check         # KB lint (dangling links, untagged notes, run records, dependency-update config), then the test suites
 uv run tools/rx.py test          # the test suites: root suite + every project with a synced .venv
+uv run tools/rx.py test --report r.json   # same, plus machine-readable JSON (check takes it too)
 uv run tools/rx.py leads         # discovery queue: what is worth more research
 uv run tools/rx.py ingest        # acquire + queue documents from the corpus
 uv run tools/rx.py doctor        # hardware + backend report

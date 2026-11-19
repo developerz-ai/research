@@ -108,6 +108,8 @@ uv run --with pytest pytest tools/test_rx.py -q   # the root suite, directly
 uv run tools/rx.py test                           # the harness: root suite + every project
 uv run tools/rx.py check                          # the lint, then the same suites
 ./bin/check                                       # shim over `uv run tools/rx.py check` (Windows: python bin/check)
+uv run tools/rx.py test --report r.json           # the same run, as machine-readable JSON
+uv run tools/rx.py check --report r.json          # ditto, with the lint outcome included
 ```
 
 `rx test` runs:
@@ -128,6 +130,34 @@ understands `--isolated` (the flag is added only when `uv run --help` lists it),
 otherwise `uv run --with pytest pytest ...`, falling back to `python -m pytest` when uv
 is not on PATH — with `VIRTUAL_ENV` stripped, so the child never modifies the
 ephemeral environment `rx.py` itself runs in.
+
+### `--report PATH`
+
+`rx test` and `rx check` take an optional `--report PATH`. Without the flag no file is
+written anywhere and both commands behave exactly as before; with it, the run's outcome
+is also written as JSON at that path, and missing parent directories are created.
+
+The path is used as typed, so a relative path resolves against the working directory of
+the process that runs `rx.py` — your shell when you call `uv run tools/rx.py …` directly.
+`bin/check` forwards its arguments, so `--report` works through the shim too, but the shim
+starts the child with the repository root as its working directory (`bin/check:31`), so a
+relative `--report r.json` there lands in the repo root and shows up in the tracked tree.
+Pass an absolute path through `bin/check`, or run `rx.py` directly from your shell.
+
+The file carries `schema_version` (currently `1`), `command`, a UTC `generated_at`, the
+`revision` (`commit`/`branch`/`dirty`, plus `available: false` with nulls when git cannot
+answer — never a guessed sha), a `suites` array, `result` (`pass`/`fail`) and the run's
+`exit_code`. `check` adds a `lint` block (`problems`, `notices`, `skipped`).
+
+Each suite entry has `name`, `files`, `status`, `started`, `detail` and `output_tail`.
+`status` is finer than the printed labels: `skip` is a suite that was never attempted
+(no synced `.venv`), and `unstarted` is one that produced no verdict at all — no test
+files, no pytest in the interpreter, could not start, timed out, or collected nothing —
+as distinct from `fail`, a suite that really ran and went red. All of `fail` and
+`unstarted` are still red on screen and still exit non-zero.
+
+A report that cannot be written prints `error: could not write report <path>: ...` to
+stderr and exits 1, whatever the suites did.
 
 ## PyTorch and CUDA
 

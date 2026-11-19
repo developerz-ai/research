@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -128,6 +128,8 @@ def cmd_help(args: argparse.Namespace) -> int:
         "uv run tools/rx.py leads        what is worth more research, ranked",
         "uv run tools/rx.py check        knowledge base lint, then the test suites",
         "uv run tools/rx.py test         the repo's test suites",
+        "uv run tools/rx.py test --report out.json    the same run, as JSON",
+        "                              (check takes --report too; absent flag, no file)",
     ):
         print(f"    {line}")
     print()
@@ -1154,12 +1156,20 @@ def cmd_check(args: argparse.Namespace) -> int:
     else:
         print(green("  knowledge base clean"))
 
+    report_path = getattr(args, "report", None)
+
     if getattr(args, "no_tests", False):
         print(dim("  test suites skipped (--no-tests)"))
-        return 1 if problems else 0
+        ok = not problems
+        if report_path is not None:
+            lint = {"problems": len(problems), "notices": len(notices), "skipped": True}
+            ok = _write_report(report_path, _suite_report("check", [], ok, lint)) and ok
+        return 0 if ok else 1
 
     print()
-    tests_ok = _run_suites_report()
+    lint = {"problems": len(problems), "notices": len(notices), "skipped": False}
+    tests_ok = _run_suites_report(report_path, command="check", lint=lint,
+                                  failing=bool(problems))
     return 0 if (not problems and tests_ok) else 1
 
 
@@ -1182,13 +1192,27 @@ class Suite:
 
 @dataclass
 class SuiteResult:
-    """What happened to one suite."""
+    """What happened to one suite.
+
+    ``status`` is what the run concluded — PASS, FAIL or SKIP — and it is the only
+    thing the summary prints. Two more facts are needed to report on it honestly:
+
+    - ``started``: a child pytest process was actually launched;
+    - ``verdict``: that process's exit code decided the suite.
+
+    A suite that never launched, one that launched and timed out, and one whose pytest
+    collected nothing all end up FAIL here, but none of them is a red test. The report
+    keeps them apart from a suite that ran and went red; nothing about the printed
+    labels changes.
+    """
 
     name: str
     status: str               # PASS | FAIL | SKIP
-    files: str = ""
+    files: list[str] = field(default_factory=list)
     detail: str = ""
     output: str = ""
+    started: bool = False     # a child pytest process was launched
+    verdict: bool = False     # its exit code decided the suite
 
 
 def _venv_python(venv: Path) -> Path | None:
@@ -1311,35 +1335,37 @@ def _last_line(text: str) -> str:
 
 def _run_suite(suite: Suite) -> SuiteResult:
     """Run one suite in a child process and read the verdict off its exit code."""
-    files = ", ".join(suite.paths)
     if suite.skip:
-        return SuiteResult(suite.name, "SKIP", files, suite.skip)
+        return SuiteResult(suite.name, "SKIP", suite.paths, suite.skip)
     if not suite.paths:
-        return SuiteResult(suite.name, "FAIL", files, "no test files found")
+        return SuiteResult(suite.name, "FAIL", suite.paths, "no test files found")
     if suite.command and suite.command[0] == sys.executable and not _pytest_importable():
-        return SuiteResult(suite.name, "FAIL", files,
+        return SuiteResult(suite.name, "FAIL", suite.paths,
                            "pytest is not installed in this interpreter — remedy: "
                            "uv run --with pytest pytest")
     if suite.interpreter and _venv_pytest_missing(suite.interpreter):
-        return SuiteResult(suite.name, "FAIL", files,
+        return SuiteResult(suite.name, "FAIL", suite.paths,
                            "pytest is not installed in this project's .venv — "
                            "remedy: uv sync --extra dev")
     try:
         proc = subprocess.run(suite.command, cwd=str(suite.cwd), env=_child_env(),
                               capture_output=True, text=True, timeout=1800)
     except subprocess.TimeoutExpired:
-        return SuiteResult(suite.name, "FAIL", files, "timed out after 30 minutes")
+        return SuiteResult(suite.name, "FAIL", suite.paths, "timed out after 30 minutes",
+                           started=True)
     except OSError as exc:
-        return SuiteResult(suite.name, "FAIL", files, f"could not start: {exc}")
+        return SuiteResult(suite.name, "FAIL", suite.paths, f"could not start: {exc}")
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     if proc.returncode == 0:
-        return SuiteResult(suite.name, "PASS", files, _last_line(stdout or stderr))
+        return SuiteResult(suite.name, "PASS", suite.paths,
+                           _last_line(stdout or stderr), started=True, verdict=True)
     if proc.returncode == _PYTEST_NO_TESTS:
-        return SuiteResult(suite.name, "FAIL", files,
-                           "pytest exit 5 — no tests collected", stdout + stderr)
-    return SuiteResult(suite.name, "FAIL", files, f"pytest exit {proc.returncode}",
-                       stdout + stderr)
+        return SuiteResult(suite.name, "FAIL", suite.paths,
+                           "pytest exit 5 — no tests collected", stdout + stderr,
+                           started=True)
+    return SuiteResult(suite.name, "FAIL", suite.paths, f"pytest exit {proc.returncode}",
+                       stdout + stderr, started=True, verdict=True)
 
 
 def _print_suite_results(results: list[SuiteResult]) -> None:
@@ -1348,7 +1374,7 @@ def _print_suite_results(results: list[SuiteResult]) -> None:
         label = {"PASS": green("PASS"), "FAIL": red("FAIL")}.get(r.status, yellow("SKIP"))
         parts = [f"  {label}  {r.name}"]
         if r.files:
-            parts.append(dim(r.files))
+            parts.append(dim(", ".join(r.files)))
         if r.detail:
             parts.append(red(r.detail) if r.status == "FAIL" else dim(r.detail))
         print("  · ".join(parts))
@@ -1357,8 +1383,128 @@ def _print_suite_results(results: list[SuiteResult]) -> None:
                 print(f"        {row}")
 
 
-def _run_suites_report() -> bool:
-    """Run every suite and print the summary. True when everything that ran passed."""
+def _report_timestamp() -> str:
+    """Now, in UTC, as ISO-8601 with the trailing ``Z`` a reader expects."""
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _report_revision() -> dict[str, object]:
+    """The revision facts, from evidence only — never a guessed commit.
+
+    ``git()`` answers "" when git is absent or the lookup fails. That is the report's
+    explicit unavailable state: no commit, no branch, and no dirty flag, rather than
+    the empty string dressed up as a revision or the literal "unknown" read as a sha.
+    """
+    commit = git("rev-parse", "--short", "HEAD")
+    if not commit:
+        return {"commit": None, "branch": None, "dirty": None, "available": False}
+    return {
+        "commit": commit,
+        "branch": git("rev-parse", "--abbrev-ref", "HEAD") or None,
+        "dirty": bool(git("status", "--porcelain")),
+        "available": True,
+    }
+
+
+def _report_status(result: SuiteResult) -> str:
+    """One suite's status in the report: pass | fail | skip | unstarted.
+
+    Derived here and nowhere else. ``verdict`` is the evidence that a child pytest
+    process ran *and* its exit code decided the suite, so a suite that went red is told
+    apart from one that never got that far: no test files, no pytest installed, could
+    not start, timed out, or collected nothing. All of those stay FAIL in the summary.
+    """
+    if result.status == "SKIP":
+        return "skip"
+    if not result.verdict:
+        return "unstarted"
+    return "pass" if result.status == "PASS" else "fail"
+
+
+def _suite_report(
+    command: str,
+    results: list[SuiteResult],
+    ok: bool,
+    lint: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """The machine-readable record of one ``rx test`` / ``rx check`` run.
+
+    Shape and keys are a contract for whatever reads the file; schema_version names it.
+    ``exit_code`` is what the process is about to return, so a caller can trust the file
+    instead of re-reading the shell's status.
+    """
+    body: dict[str, object] = {
+        "schema_version": 1,
+        "command": command,
+        "generated_at": _report_timestamp(),
+        "revision": _report_revision(),
+    }
+    if lint is not None:
+        body["lint"] = lint
+    suites: list[dict[str, object]] = []
+    for r in results:
+        status = _report_status(r)
+        entry: dict[str, object] = {
+            "name": r.name,
+            "files": list(r.files),
+            "status": status,
+            "started": r.started,
+            "detail": r.detail,
+            "output_tail": "",
+        }
+        if status == "fail":
+            entry["output_tail"] = "\n".join((r.output or "").splitlines()[-40:])
+        suites.append(entry)
+    body["suites"] = suites
+    body["result"] = "pass" if ok else "fail"
+    body["exit_code"] = 0 if ok else 1
+    return body
+
+
+def _write_report(path_text: str, body: dict[str, object]) -> bool:
+    """Write the report atomically. False (and an error naming the path) on failure.
+
+    The destination is the caller's string, so a relative path resolves against the
+    process cwd as typed, and missing parents are created. A report that cannot be
+    written fails the command whatever the suites did, and never raises out of main.
+    """
+    dest = Path(path_text)
+    tmp: Path | None = None
+    # Deriving the sibling temp name is itself a way to fail: a destination with an empty
+    # final component (`.`, `/`, `--report ""`) has no name to append to, and ``with_name``
+    # says so with ValueError, not OSError. Every bad destination must land in the one
+    # documented error, so the derivation belongs inside the guard.
+    try:
+        tmp = dest.with_name(dest.name + ".tmp")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(dest)
+    except (OSError, ValueError) as exc:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        print(red(f"error: could not write report {path_text}: {exc}"), file=sys.stderr)
+        return False
+    return True
+
+
+def _run_suites_report(
+    report_path: str | None = None,
+    *,
+    command: str = "test",
+    lint: dict[str, object] | None = None,
+    failing: bool = False,
+) -> bool:
+    """Run every suite and print the summary. True when everything that ran passed.
+
+    A report is written only when a path was passed, so the default run still creates
+    no file anywhere in the tree. A report-write failure fails the command; writing one
+    never turns a red run green. ``failing`` says an earlier phase (the lint, under
+    ``check``) already decided the exit code, so the report's ``exit_code`` matches the
+    status the command is about to return.
+    """
     results = [_run_suite(s) for s in [_root_suite(), *_project_suites()]]
     print(bold("  test suites"))
     _print_suite_results(results)
@@ -1368,19 +1514,25 @@ def _run_suites_report() -> bool:
     print()
     if not ran:
         print(red("  no suite ran — nothing was tested"))
-        return False
-    if failed:
+        ok = False
+    elif failed:
         names = ", ".join(r.name for r in failed)
         print(red(f"  {len(failed)} suite(s) failed: {names}"))
-        return False
-    print(green(f"  {len(ran)} suite(s) passed, {skipped} skipped"))
-    return True
+        ok = False
+    else:
+        print(green(f"  {len(ran)} suite(s) passed, {skipped} skipped"))
+        ok = True
+    ok = ok and not failing
+    if report_path is not None:
+        wrote = _write_report(report_path, _suite_report(command, results, ok, lint))
+        ok = ok and wrote
+    return ok
 
 
 def cmd_test(args: argparse.Namespace) -> int:
     """Run the repo's test suites: the root suite, and each synced project's."""
     print()
-    ok = _run_suites_report()
+    ok = _run_suites_report(getattr(args, "report", None), command="test")
     print()
     return 0 if ok else 1
 
@@ -1417,7 +1569,11 @@ def main(argv: list[str] | None = None) -> int:
     p_check = sub.add_parser("check")
     p_check.add_argument("--no-tests", action="store_true",
                          help="skip the test suites (fast lint only)")
-    sub.add_parser("test")
+    p_check.add_argument("--report", metavar="PATH",
+                         help="also write the run as JSON to PATH")
+    p_test = sub.add_parser("test")
+    p_test.add_argument("--report", metavar="PATH",
+                        help="also write the run as JSON to PATH")
     sub.add_parser("ingest")
     sub.add_parser("leads")
 

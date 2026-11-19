@@ -16,6 +16,11 @@ non-string, anything that is not 7-40 hex digits with an optional ``-dirty``
 suffix — is a problem, because a presence-only check let the writer's fallback
 value go green.
 
+The report tests pin the machine-readable record ``rx test --report`` and
+``rx check --report`` write: one shape, one status per suite that distinguishes
+a red suite from a skipped one and from one that never started, and a revision
+taken from evidence — never the word "unknown" standing in for a commit.
+
 The scaffold tests drive ``cmd_new_project`` against the real
 ``templates/`` directory, so template drift fails here instead of at the next
 project's creation.
@@ -28,6 +33,7 @@ Run from the repo root:
 from __future__ import annotations
 
 import ast
+import datetime as dt
 import importlib.machinery
 import importlib.util
 import json
@@ -1241,6 +1247,403 @@ def test_help_lists_the_test_command(capsys: pytest.CaptureFixture[str]) -> None
     assert rx.main(["help"]) == 0
     out = capsys.readouterr().out
     assert any(line.strip().startswith("test ") for line in out.splitlines())
+
+
+def test_help_documents_the_report_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    """`rx help` is where a caller discovers the flag; an undiscoverable flag is dead."""
+    assert rx.main(["help"]) == 0
+    out = capsys.readouterr().out
+    assert "--report" in out
+
+
+# ── --report: the machine-readable record of one run ───────────────────────────
+
+REPORT_KEYS = {"schema_version", "command", "generated_at", "revision", "suites",
+               "result", "exit_code"}
+SUITE_KEYS = {"name", "files", "status", "started", "detail", "output_tail"}
+
+
+def _fake_git(
+    monkeypatch: pytest.MonkeyPatch, *, sha: str = "abc1234", branch: str = "main",
+    dirty: bool = True,
+) -> None:
+    """Answer the revision lookups without a repository, and let the test know what.
+
+    The report has to carry what git said, so every report test drives the same
+    answers: one sha for the HEAD lookups, one branch name, and a porcelain
+    status whose emptiness is the dirty flag. ``git`` is patched on ``rx``
+    itself, so the faked ``subprocess.run`` below never sees a git call.
+    """
+    porcelain = " M tools/rx.py\n" if dirty else ""
+
+    def fake_git(*args: str) -> str:
+        flags = " ".join(args)
+        if "porcelain" in flags or "status" in flags:
+            return porcelain
+        if "abbrev-ref" in flags or "branch" in flags or "symbolic-ref" in flags:
+            return branch
+        return sha
+
+    monkeypatch.setattr(rx, "git", fake_git)
+
+
+def _read_report(path: Path) -> dict:
+    """Parse a written report — a malformed one fails here, not in a consumer."""
+    assert path.is_file(), path
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _by_name(report: dict) -> dict[str, dict]:
+    return {suite["name"]: suite for suite in report["suites"]}
+
+
+def _assert_report_shape(report: dict, command: str) -> None:
+    """The shape both commands share, asserted once."""
+    assert REPORT_KEYS <= set(report), sorted(report)
+    assert report["schema_version"] == 1
+    assert report["command"] == command
+    assert report["result"] in {"pass", "fail"}, report["result"]
+    assert report["exit_code"] in {0, 1}, report["exit_code"]
+    generated_at = report["generated_at"]
+    assert generated_at.endswith("Z"), generated_at
+    dt.datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    assert isinstance(report["suites"], list), report["suites"]
+    for suite in report["suites"]:
+        assert SUITE_KEYS <= set(suite), sorted(suite)
+        assert isinstance(suite["files"], list), suite["files"]
+        assert suite["status"] in {"pass", "fail", "skip", "unstarted"}, suite["status"]
+        assert isinstance(suite["started"], bool), suite["started"]
+
+
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_rx_test_report_records_the_run(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, dirty: bool,
+) -> None:
+    """A green `rx test --report` writes the whole record, revision included."""
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch, dirty=dirty)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "out" / "r.json"  # missing parents are created
+
+    assert rx.main(["test", "--report", str(report_path)]) == 0
+    report = _read_report(report_path)
+    _assert_report_shape(report, "test")
+    assert report["result"] == "pass"
+    assert report["exit_code"] == 0
+    # `test` knows nothing about the knowledge-base lint, so it must not claim a verdict on it
+    assert "lint" not in report
+    assert report["revision"] == {"commit": "abc1234", "branch": "main",
+                                  "dirty": dirty, "available": True}
+
+    suites = _by_name(report)
+    assert {"root", "002-synced", "001-unsynced"} <= set(suites), sorted(suites)
+    assert suites["root"]["status"] == "pass"
+    assert suites["root"]["started"] is True
+    assert "tools/test_demo.py" in suites["root"]["files"]
+    assert suites["001-unsynced"]["status"] == "skip"
+    assert suites["001-unsynced"]["started"] is False
+
+
+def test_a_failing_suite_is_a_failed_report_and_still_written(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Red run: exit 1, result "fail", the red suite named, and the report on disk."""
+    runner = FakeRunner(returncode=1, stdout="1 failed in 0.01s")
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["test", "--report", str(report_path)]) == 1
+    report = _read_report(report_path)
+    _assert_report_shape(report, "test")
+    assert report["result"] == "fail"
+    assert report["exit_code"] == 1
+    suites = _by_name(report)
+    assert suites["root"]["status"] == "fail"
+    assert suites["root"]["started"] is True
+    # the failure's own output travels with it, so the report can be read without the log
+    assert "1 failed in 0.01s" in suites["root"]["output_tail"]
+
+
+@pytest.mark.parametrize(
+    "make_runner",
+    [
+        _MissingPytestRunner,
+        _TimeoutRunner,
+        lambda: FakeRunner(returncode=5, stdout="no tests ran in 0.01s"),
+    ],
+    ids=["pytest-missing-in-venv", "timed-out", "nothing-collected"],
+)
+def test_a_suite_that_never_ran_is_unstarted_not_skipped_and_not_red(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, make_runner,
+) -> None:
+    """Three verdicts, three statuses: a suite that could not run is neither green nor red.
+
+    "Skipped" means the environment was never going to run it; "unstarted" means
+    the run tried and the suite never got going. Collapsing them hides the second,
+    which is the one worth chasing.
+    """
+    runner = make_runner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["test", "--report", str(report_path)]) == 1
+    report = _read_report(report_path)
+    _assert_report_shape(report, "test")
+    suites = _by_name(report)
+    assert suites["002-synced"]["status"] == "unstarted", suites["002-synced"]
+    assert suites["001-unsynced"]["status"] == "skip", suites["001-unsynced"]
+    assert suites["002-synced"]["detail"], suites["002-synced"]
+    # nothing here is a red test: no suite may be reported as a failed one
+    assert "fail" not in {s["status"] for s in report["suites"]}, report["suites"]
+    assert report["result"] == "fail"
+    assert report["exit_code"] == 1
+
+
+def test_rx_check_report_carries_the_lint_outcome(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`check` reports the lint alongside the suites — clean lint, green run."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["check", "--report", str(report_path)]) == 0
+    report = _read_report(report_path)
+    _assert_report_shape(report, "check")
+    assert "lint" in report, sorted(report)
+    lint = report["lint"]
+    assert lint["problems"] == 0, lint
+    assert lint["notices"] == 0, lint
+    assert lint["skipped"] is False, lint
+    assert report["result"] == "pass"
+    assert report["exit_code"] == 0
+
+
+def test_a_stated_gap_is_a_notice_in_the_report(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Notices are counted separately from problems: an admitted gap is not a failure."""
+    def lint(notices=None):
+        if notices is not None:
+            notices.append("library/x.md: git_sha 'unknown', and the record's notes state the gap")
+        return []
+
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lint)
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["check", "--report", str(report_path)]) == 0
+    lint_report = _read_report(report_path)["lint"]
+    assert lint_report["notices"] == 1, lint_report
+    assert lint_report["problems"] == 0, lint_report
+
+
+def test_a_knowledge_base_problem_is_a_failed_check_report(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lint problem fails the check, and the report says so instead of going green."""
+    monkeypatch.setattr(
+        rx, "_knowledge_base_problems",
+        lambda _notices=None: ["library/x.md: dangling link [[y]]"])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["check", "--report", str(report_path)]) == 1
+    report = _read_report(report_path)
+    _assert_report_shape(report, "check")
+    assert report["lint"]["problems"] == 1, report["lint"]
+    assert report["result"] == "fail"
+    assert report["exit_code"] == 1
+
+
+def test_a_no_tests_check_report_says_the_suites_were_skipped(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--no-tests` is a lint-only run: the report may not imply a suite ran."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["check", "--no-tests", "--report", str(report_path)]) == 0
+    report = _read_report(report_path)
+    _assert_report_shape(report, "check")
+    assert report["lint"]["skipped"] is True, report["lint"]
+    # whatever the record carries, it may not imply a suite ran
+    assert not any(s["started"] for s in report["suites"]), report["suites"]
+    assert runner.commands == []
+
+
+def test_the_report_never_invents_a_revision(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No git is an explicit absence — never a string standing in for a commit."""
+    monkeypatch.setattr(rx, "git", lambda *args: "")
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["test", "--report", str(report_path)]) == 0
+    revision = _read_report(report_path)["revision"]
+    assert revision["available"] is False, revision
+    assert revision["commit"] is None, revision
+    assert revision["branch"] is None, revision
+    assert revision["dirty"] is None, revision
+    assert "unknown" not in json.dumps(revision).lower(), revision
+
+
+def test_a_relative_report_path_resolves_against_the_callers_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The path is the caller's, so `--report out/r.json` lands where they ran it."""
+    repo = tmp_path / "repo"
+    monkeypatch.setattr(rx, "ROOT", repo)
+    monkeypatch.setattr(rx, "PROJECTS", repo / "projects")
+    monkeypatch.setattr(rx, "_UV_ISOLATED", None)
+    _write(repo / "tools" / "test_demo.py", DEMO_TEST)
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    assert rx.main(["test", "--report", "out/r.json"]) == 0
+    assert (work / "out" / "r.json").is_file()
+    assert not (repo / "out").exists()
+
+
+def test_an_unwritable_report_path_fails_the_run_and_names_the_path(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A report that cannot be written is a failed run, whatever the suites said."""
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    occupied = _write(harness_tree / "occupied", "not a directory\n")
+    report_path = occupied / "r.json"
+
+    assert rx.main(["test", "--report", str(report_path)]) == 1
+    err = capsys.readouterr().err
+    assert "could not write report" in err
+    assert str(report_path) in err
+
+
+def _a_lint_problem(_notices: list[str] | None = None) -> list[str]:
+    """A knowledge-base lint that found exactly one problem."""
+    return ["library/x.md: dangling link [[y]]"]
+
+
+@pytest.mark.parametrize(
+    "report_arg",
+    [".", "..", "/", ""],
+    ids=["dot", "dotdot", "root", "empty-string"],
+)
+def test_a_report_destination_with_no_file_name_fails_the_run_and_names_the_path(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], report_arg: str,
+) -> None:
+    """A destination that names no file is the documented error, never a traceback.
+
+    ``Path.with_name`` raises ValueError — not OSError — for a destination whose final
+    component is empty (````.````, ````/````, ``--report ""``), so deriving the temp name
+    outside the write's guard escaped ``main`` as a crash. The caller must get the same
+    exit 1 and the same message naming what they typed.
+    """
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    # the path is the caller's, so run from the synthetic tree: a relative destination
+    # must never reach for the real checkout
+    monkeypatch.chdir(harness_tree)
+
+    assert rx.main(["test", "--report", report_arg]) == 1
+    err = capsys.readouterr().err
+    assert "could not write report" in err
+    if report_arg:  # an empty path has no name to print
+        assert report_arg in err, err
+    assert "Traceback" not in err
+    assert not list(harness_tree.rglob("*.tmp")), list(harness_tree.rglob("*.tmp"))
+
+
+def test_a_no_tests_check_report_still_fails_on_a_lint_problem(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lint-only report is not a free pass: a problem is exit 1, result "fail"."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", _a_lint_problem)
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    report_path = harness_tree / "r.json"
+
+    assert rx.main(["check", "--no-tests", "--report", str(report_path)]) == 1
+    report = _read_report(report_path)
+    _assert_report_shape(report, "check")
+    assert report["lint"]["problems"] == 1, report["lint"]
+    assert report["lint"]["skipped"] is True, report["lint"]
+    assert report["result"] == "fail", report
+    assert report["exit_code"] == 1, report
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["check", "--report"], ["check", "--no-tests", "--report"]],
+    ids=["check", "check-no-tests"],
+)
+def test_an_unwritable_report_path_fails_every_command_that_writes_one(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], argv: list[str],
+) -> None:
+    """`check` fails on an unwritable report too, on both of its paths."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    occupied = _write(harness_tree / "occupied", "not a directory\n")
+    report_path = occupied / "r.json"
+
+    assert rx.main([*argv, str(report_path)]) == 1
+    err = capsys.readouterr().err
+    assert "could not write report" in err
+    assert str(report_path) in err
+
+
+def test_a_run_without_the_report_flag_writes_nothing(
+    harness_tree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent flag, absent file: no command may litter the tree it was run in."""
+    monkeypatch.setattr(rx, "_knowledge_base_problems", lambda _notices=None: [])
+    runner = FakeRunner()
+    _fake_uv(monkeypatch)
+    _fake_git(monkeypatch)
+    monkeypatch.setattr(rx.subprocess, "run", runner)
+    before = set(harness_tree.rglob("*"))
+
+    assert rx.main(["test"]) == 0
+    assert rx.main(["check"]) == 0
+    assert set(harness_tree.rglob("*")) == before
 
 
 # ── provenance: a result's git_sha must name a commit ─────────────────────────
